@@ -1,0 +1,11 @@
+{
+  "name": "stt-tcp-test-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Simple TCP server for AudioHook STT integration testing",
+  "main": "server.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

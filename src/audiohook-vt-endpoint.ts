@@ -11,7 +11,7 @@ dotenv.config();
 
 export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, path: string): void => {
 
-    const fileLogRoot = process.env['LOG_ROOT_DIR'] || process.cwd();
+    const fileLogRoot = process.env['RECORDING_DIR'] || process.cwd();
 
     fastify.log.info(`LocalLogRootDir: ${fileLogRoot}`);
 

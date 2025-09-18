@@ -31,7 +31,8 @@
     "pino": "8.11.0",
     "pino-pretty": "8.1.0",
     "tdigest": "0.1.2",
-    "uuid": "8.3.2"
+    "uuid": "8.3.2",
+    "ws": "^8.17.0"
   },
   "devDependencies": {
     "@aws-sdk/client-transcribe-streaming": "3.529.0",

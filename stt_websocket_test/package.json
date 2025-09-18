@@ -1,0 +1,14 @@
+{
+  "name": "stt-connection-test-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Simple WS server for AudioHook STT integration testing",
+  "main": "server.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

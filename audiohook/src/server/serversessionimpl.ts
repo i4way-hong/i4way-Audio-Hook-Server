@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { existsSync } from 'fs';
 import {
     ClientMessage,
     CloseMessage,
@@ -65,7 +66,12 @@ import {
     StatisticsInfo,
     UpdateHandler,
 } from './serversession';
-
+import { WavFileWriter } from '../audio/wav';
+import { mkdir } from 'fs/promises';
+import { join } from 'path';
+import recordingConfig from '../utils/config';
+import sttConfig from '../utils/stt-config';
+import { createSttForwarder, SttForwarder } from './stt-forwarder';
 
 type StateToBooleanMap = {
     readonly [state in ServerSessionState]: boolean
@@ -153,6 +159,20 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
     closeHandlers: CloseHandler[] = [];
     finiHandlers: FiniHandler[] = [];
 
+    // WAV 기록 관련 상태
+    private audioWriter: WavFileWriter | null = null;
+    private audioWriterPromise: Promise<WavFileWriter | null> | null = null;
+    private pendingAudioFrames: MediaDataFrame[] = [];
+    private recordingFilePath: string | null = null;
+    // 파일 저장 기능 설정
+    private fileRecordingEnabled = true;
+    private fileRecordingRoot: string = join(process.cwd(), 'recordings');
+    private unsubscribeConfig?: () => void;
+    private recordingWatchTimer: NodeJS.Timeout | null = null;
+    private isRotating = false;
+    private sttForwarder: SttForwarder | null = null;
+    private sttForwarderPromise: Promise<SttForwarder | null> | null = null;
+
     private constructor({ ws, id, logger, timeProvider, supportedLanguages }: ServerSessionOptions) {
         super();
         this.ws = ws;
@@ -161,6 +181,58 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
         this.timeProvider = timeProvider ?? defaultTimeProvider;
         this.supportedLanguages = supportedLanguages ?? null;
         this.lastPingTimestamp = this.timeProvider.getHighresTimestamp();
+        // 글로벌 설정에서 초기값 반영 및 업데이트 구독
+        this.fileRecordingEnabled = recordingConfig.recordingEnabled;
+        this.fileRecordingRoot = recordingConfig.logRootDir ?? this.fileRecordingRoot;
+        this.unsubscribeConfig = recordingConfig.onUpdate((next) => {
+            const wasEnabled = this.fileRecordingEnabled;
+            const prevRoot = this.fileRecordingRoot;
+            this.fileRecordingEnabled = next.recordingEnabled;
+            this.fileRecordingRoot = next.logRootDir ?? this.fileRecordingRoot;
+            if (wasEnabled && !this.fileRecordingEnabled) {
+                // 비활성화됨: 현재 파일 닫고 큐 제거
+                (async () => {
+                    try {
+                        if (this.audioWriter) {
+                            const samples = await this.audioWriter.close();
+                            this.logger.info(`Recording disabled, file closed (${samples} samples)`);
+                        } else if (this.audioWriterPromise) {
+                            const w = await this.audioWriterPromise;
+                            if (w) {
+                                const samples = await w.close();
+                                this.logger.info(`Recording disabled, file closed (${samples} samples)`);
+                            }
+                        }
+                    } catch (e) {
+                        this.logger.warn(`Error closing on disable: ${normalizeError(e).message}`);
+                    } finally {
+                        this.audioWriter = null;
+                        this.audioWriterPromise = null;
+                        this.pendingAudioFrames = [];
+                        this.recordingFilePath = null;
+                    }
+                })().catch(() => void 0);
+            } else if (this.fileRecordingEnabled && prevRoot !== this.fileRecordingRoot) {
+                if (recordingConfig.immediateRotate) {
+                    try {
+                        void this.rotateRecordingFile();
+                    } catch (e) {
+                        this.logger.warn(`rotateRecordingFile failed: ${normalizeError(e).message}`);
+                    }
+                } else {
+                    this.logger.info(`Recording directory changed: ${prevRoot} -> ${this.fileRecordingRoot} (applies to next file)`);
+                }
+            }
+        });
+
+        // STT 설정 구독: 주요 변경 시 재연결
+        sttConfig.onUpdate(async () => {
+            try {
+                await this.restartSttForwarderIfNeeded(true);
+            } catch (e) {
+                this.logger.warn(`restartSttForwarderIfNeeded failed: ${normalizeError(e).message}`);
+            }
+        });
         this.registerHandlers();
         this.messageDispatch = {
             open: msg => this.onOpenMessage(msg),
@@ -315,6 +387,19 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
             this.logger.info(`onWsClose - Websocket closed. Code: ${code}`);
         }
         this.setState('FINALIZING');
+        // 설정 구독 해제
+        try {
+            this.unsubscribeConfig?.();
+        } catch {
+            /* ignore */
+        }
+        this.stopRecordingWatch();
+        // STT 포워더 종료
+        const fwd = this.sttForwarder;
+        this.sttForwarder = null;
+        if (fwd) {
+            void fwd.stop();
+        }
 
         // Run close handlers in case we didn't get a close or if there are any stragglers. After that run all fini handlers.
         (this.openTransactionPromise ?? Promise.resolve())
@@ -438,6 +523,11 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
                 return this.signalClientError(`Invalid Message: '${message.type}' is not a supported client message`);
             }
         }
+        // 모든 유효성 검사를 통과한 제어 메시지를 로그로 출력
+        try {
+            this.logger.info(`Control message: ${JSON.stringify(message).substring(0, 2048)}`);
+        } catch { /* ignore stringify errors */ }
+
         this.emit('clientMessage', message);
         this.messageDispatch[message.type](message as never);
     }
@@ -549,6 +639,12 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
                         }
                         this.buildAndSendMessage('opened', openedParams);
                         this.setState('ACTIVE');
+                        // 활성화되면 오디오 녹음 준비 시작
+                        try {
+                            this.startAudioRecording();
+                        } catch (e) {
+                            this.logger.warn(`startAudioRecording trigger failed: ${normalizeError(e).message}`);
+                        }
                     } else if (!logged) {
                         this.logger.info(`onOpenMessage - State changed to ${this.state} during open handlers`);
                     }
@@ -639,6 +735,39 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
     }
 
     onAudioData(frame: MediaDataFrame): void {
+        // 파일 저장 기능이 비활성화된 경우 저장을 우회
+        if (!this.fileRecordingEnabled) {
+            this.emit('audio', frame);
+            // STT 포워딩
+            void this.ensureSttForwarder().then(() => this.sttForwarder?.send(frame)).catch(() => void 0);
+            return;
+        }
+        // 오디오 파일 작성기가 준비되지 않았다면 시작 시도
+        if (!this.audioWriter && !this.audioWriterPromise) {
+            try {
+                this.startAudioRecording();
+            } catch (e) {
+                this.logger.warn(`startAudioRecording (onAudioData) failed: ${normalizeError(e).message}`);
+            }
+        }
+        const writer = this.audioWriter;
+        if (writer) {
+            try {
+                // 멀티채널 인터리브된 프레임 데이터를 그대로 기록
+                writer.writeAudio(frame.audio.data as unknown as Uint8Array | Int16Array);
+            } catch (err) {
+                this.logger.warn(`onAudioData - Error writing audio: ${normalizeError(err).message}`);
+                // 쓰기 오류 발생 시 자동 회전 시도
+                if (!this.isRotating) {
+                    void this.rotateRecordingFile();
+                }
+            }
+        } else if (this.audioWriterPromise) {
+            // 작성기 준비 중이면 큐에 보관
+            this.pendingAudioFrames.push(frame);
+        }
+        // STT 포워딩
+        void this.ensureSttForwarder().then(() => this.sttForwarder?.send(frame)).catch(() => void 0);
         this.emit('audio', frame);
     }
 
@@ -775,6 +904,200 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
                     this.logger.warn(`Error executing fini handler: ${normalizeError(result.reason).stack}`);
                 }
             });
+        }
+    }
+
+    private startAudioRecording(): void {
+        if (!this.fileRecordingEnabled) {
+            this.logger.info('startAudioRecording - File recording disabled by configuration');
+            return;
+        }
+        if (this.audioWriter || this.audioWriterPromise) {
+            return; // already starting or started
+        }
+        const media = this.selectedMedia;
+        if (!media) {
+            this.logger.warn('startAudioRecording - No selected media; cannot start recording');
+            return;
+        }
+        try {
+            const dir = this.fileRecordingRoot;
+            const filename = `${String(this.id)}_${Date.now()}.wav`;
+            const fullPath = join(dir, filename);
+            this.recordingFilePath = fullPath;
+            this.audioWriterPromise = mkdir(dir, { recursive: true })
+                .then(() => WavFileWriter.create(fullPath, media.format, media.rate, media.channels.length))
+                .then(writer => {
+                    this.audioWriter = writer;
+                    this.logger.info(`Audio recording started: ${fullPath} (${media.format}, ${media.rate}Hz, ${media.channels.length}ch)`);
+                    // 대기 중인 프레임을 즉시 기록
+                    const queued = this.pendingAudioFrames;
+                    this.pendingAudioFrames = [];
+                    for (const f of queued) {
+                        try {
+                            writer.writeAudio(f.audio.data as unknown as Uint8Array | Int16Array);
+                        } catch (err) {
+                            this.logger.warn(`startAudioRecording - Error writing queued frame: ${normalizeError(err).message}`);
+                        }
+                    }
+                    // 파일 유실 감시 시작
+                    this.startRecordingWatch();
+                    return writer;
+                })
+                .catch(err => {
+                    const error = normalizeError(err);
+                    this.logger.error(`startAudioRecording - Failed to initialize WAV writer: ${error.stack}`);
+                    this.audioWriterPromise = null;
+                    this.recordingFilePath = null;
+                    // 기록 실패 시 큐는 버퍼로 남지만 더 이상 진행하지 않음
+                    return null;
+                });
+
+            // 세션 종료 시 파일을 닫도록 close 핸들러 등록
+            this.closeHandlers.push(async () => {
+                try {
+                    const p = this.audioWriterPromise;
+                    if (p) {
+                        const w = await p;
+                        if (w) {
+                            const samples = await w.close();
+                            this.logger.info(`Audio recording closed (${samples} samples)${this.recordingFilePath ? `: ${this.recordingFilePath}` : ''}`);
+                        }
+                    } else if (this.audioWriter) {
+                        const samples = await this.audioWriter.close();
+                        this.logger.info(`Audio recording closed (${samples} samples)${this.recordingFilePath ? `: ${this.recordingFilePath}` : ''}`);
+                    }
+                } catch (err) {
+                    this.logger.warn(`Error closing audio recording: ${normalizeError(err).stack}`);
+                } finally {
+                    this.audioWriter = null;
+                    this.audioWriterPromise = null;
+                    this.pendingAudioFrames = [];
+                    this.recordingFilePath = null;
+                    this.stopRecordingWatch();
+                }
+            });
+        } catch (err) {
+            this.logger.error(`startAudioRecording - Unexpected error: ${normalizeError(err).stack}`);
+        }
+    }
+
+    private startRecordingWatch(): void {
+        this.stopRecordingWatch();
+        if (!this.recordingFilePath) {
+            return;
+        }
+        // 2초마다 파일 존재 여부를 확인하고, 없으면 회전
+        this.recordingWatchTimer = setInterval(() => {
+            try {
+                const path = this.recordingFilePath;
+                if (!path) {
+                    return;
+                }
+                if (!existsSync(path)) {
+                    this.logger.warn(`Recording file missing. Rotating to new file. path=${path}`);
+                    if (!this.isRotating) {
+                        void this.rotateRecordingFile();
+                    }
+                }
+            } catch (e) {
+                this.logger.warn(`startRecordingWatch - check failed: ${normalizeError(e).message}`);
+            }
+        }, 2000);
+    }
+
+    private stopRecordingWatch(): void {
+        if (this.recordingWatchTimer) {
+            clearInterval(this.recordingWatchTimer);
+            this.recordingWatchTimer = null;
+        }
+    }
+
+    private async rotateRecordingFile(): Promise<void> {
+        if (this.isRotating) {
+            return;
+        }
+        this.isRotating = true;
+        if (!this.fileRecordingEnabled) {
+            this.isRotating = false;
+            return;
+        }
+        // 닫고 새 파일로 재시작
+        try {
+            if (this.audioWriter) {
+                const samples = await this.audioWriter.close();
+                this.logger.info(`Recording rotated, old file closed (${samples} samples)`);
+            } else if (this.audioWriterPromise) {
+                const w = await this.audioWriterPromise;
+                if (w) {
+                    const samples = await w.close();
+                    this.logger.info(`Recording rotated, old file closed (${samples} samples)`);
+                }
+            }
+        } catch (e) {
+            this.logger.warn(`rotateRecordingFile - error closing old file: ${normalizeError(e).message}`);
+        }
+        this.audioWriter = null;
+        this.audioWriterPromise = null;
+        this.pendingAudioFrames = [];
+        this.recordingFilePath = null;
+        // 새 파일 시작
+        try {
+            this.startAudioRecording();
+        } finally {
+            this.isRotating = false;
+        }
+    }
+
+    private async ensureSttForwarder(): Promise<void> {
+        if (!sttConfig.enabled) {
+            return;
+        }
+        if (this.sttForwarder) {
+            return;
+        }
+        if (this.sttForwarderPromise) {
+            await this.sttForwarderPromise;
+            return;
+        }
+        this.sttForwarderPromise = (async () => {
+            const fwd = createSttForwarder(sttConfig.protocol, this.logger);
+            await fwd.start();
+            this.sttForwarder = fwd;
+            return fwd;
+        })().catch(err => {
+            this.logger.warn(`Failed to start STT forwarder: ${normalizeError(err).message}`);
+            return null;
+        }).finally(() => {
+            this.sttForwarderPromise = null;
+        });
+        await this.sttForwarderPromise;
+    }
+
+    private async restartSttForwarderIfNeeded(force = false): Promise<void> {
+        if (!sttConfig.enabled) {
+            // ensure any in-progress start finishes, then stop
+            if (this.sttForwarderPromise) {
+                await this.sttForwarderPromise;
+            }
+            if (this.sttForwarder) {
+                await this.sttForwarder.stop();
+                this.sttForwarder = null;
+            }
+            return;
+        }
+        // wait for any in-progress start
+        if (this.sttForwarderPromise) {
+            await this.sttForwarderPromise;
+        }
+        if (force && this.sttForwarder) {
+            await this.sttForwarder.stop();
+            this.sttForwarder = null;
+        }
+        if (!this.sttForwarder) {
+            const fwd = createSttForwarder(sttConfig.protocol, this.logger);
+            await fwd.start();
+            this.sttForwarder = fwd;
         }
     }
 

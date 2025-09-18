@@ -22,7 +22,7 @@ type AuthStrategy = 'request' | 'session';
 
 export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string): void => {
 
-    const fileLogRoot = process.env['LOG_ROOT_DIR'] ?? process.cwd();
+    const fileLogRoot = process.env['RECORDING_DIR'] ?? process.cwd();
     const recordingS3Bucket = process.env['RECORDING_S3_BUCKET'] ?? null;
 
     fastify.log.info(`LocalLogRootDir: ${fileLogRoot}`);
