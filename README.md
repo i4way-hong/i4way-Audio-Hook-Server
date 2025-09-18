@@ -19,11 +19,20 @@ WebSocket 전용
 - STT_WS_INIT_JSON={"type":"init","sampleRate":8000} (연결 직후 송신)
 - STT_WS_PING_SEC=30 (0/음수/NaN이면 비활성화)
 - STT_WS_BYE_JSON={"type":"bye"} (종료 시 송신)
+- STT_WS_LOG_ASCII=1 (옵션) 수신 텍스트 로그의 비ASCII 문자를 \uXXXX로 이스케이프
 
 TCP 전용
 - STT_TCP_FRAMING=raw|len32|newline
 - STT_TCP_INIT_HEX=0a0b0c (연결 직후 송신할 HEX)
 - STT_TCP_BYE_HEX=ff00 (종료 시 송신할 HEX)
+
+### 수신 로그 미리보기
+- WebSocket
+  - 텍스트: `STT WS recv text: <앞 200자 미리보기>`
+  - 바이너리: `STT WS recv binary (<N> bytes)`
+- TCP
+  - 프레이밍 len32/newline을 파싱해 텍스트 미리보기 로깅: `STT TCP recv text: <앞 200자>`
+  - raw 모드는 청크 단위로 UTF-8 디코드해 미리보기 로깅
 
 ### 핸드셰이크 프로파일 예시
 - WebSocket: INIT(JSON) → 바이너리 오디오 → BYE(JSON)
@@ -42,18 +51,29 @@ STT_RESAMPLE_ENABLED=false
 STT_WS_INIT_JSON={"type":"init","sampleRate":8000}
 STT_WS_PING_SEC=30
 STT_WS_BYE_JSON={"type":"bye"}
+# 콘솔 인코딩 문제 회피용(옵션)
+# STT_WS_LOG_ASCII=1
+
 # TCP 예시
 # STT_PROTOCOL=tcp
-# STT_ENDPOINT=127.0.0.1:9001
+# STT_ENDPOINT=127.0.0.1:7070
 # STT_TCP_FRAMING=len32
 # STT_TCP_INIT_HEX=0a0b
 # STT_TCP_BYE_HEX=ff
 ```
 
-### 실전/테스트 팁
-- ping 값은 양수여야 하며, NaN/0/음수는 자동 비활성화됩니다.
-- TCP framing이 알 수 없는 값이면 raw로 폴백됩니다.
-- HEX 페이로드는 짝수 길이의 16진수여야 하며, 잘못된 값은 무시됩니다.
-- resample은 현재 L16에 한해 지원합니다.
-- 테스트 환경(Jest 등)에서는 fs.watch가 비활성화되어 핸들 누수 없이 종료됩니다.
-- INIT/BYE/프레이밍/레이트/인코딩 조합별로 에코 서버로 검증 가능하며, 모든 옵션은 통합 테스트로 커버됩니다.
+## 로깅 요약
+- 개발 모드(NODE_ENV != production)
+  - 콘솔: 사람이 읽기 쉬운 pretty 형식(pino-pretty)
+  - 파일: JSON 라인, 날짜/크기 기반 회전 및 보존 적용
+- 운영 모드(NODE_ENV = production)
+  - 콘솔/파일: JSON 라인, 파일은 회전/보존 적용
+- 파일명 규칙: `logs/<prefix>-YYYY-MM-DD[-N].log` (기본 prefix=app)
+
+## 테스트 서버
+- WebSocket 테스트: `stt_websocket_test/server.js`
+  - Env: PORT(또는 STT_TEST_PORT), WS_PATH(기본 /stt)
+  - 기능: 텍스트/바이너리 수신 로그, INIT/bye 처리, 3초마다 한글 텍스트 송신
+- TCP 테스트: `stt_tcp_test/server.js`
+  - Env: PORT(또는 STT_TEST_TCP_PORT), TCP_FRAMING(raw|len32|newline), INIT_HEX, BYE_HEX
+  - 기능: 프레이밍별 수신/송신, 3초마다 한글 텍스트 송신

@@ -39,7 +39,7 @@
 
 ## 앱 역할(서버/클라이언트)
 - 기본적으로 이 애플리케이션은 WebSocket 서버입니다(Fastify 기반).
-- STT 포워딩이 활성화되면, 각 세션에서 외부 STT 서비스에 대한 WebSocket 클라이언트 역할을 추가로 수행합니다(오디오 프레임을 외부로 스트리밍).
+- STT 포워딩이 활성화되면, 각 세션에서 외부 STT 서비스에 대한 WebSocket/TCP 클라이언트 역할을 추가로 수행합니다(오디오 프레임을 외부로 스트리밍).
 
 ## `src/sim-transcribe/` 하위
 - `src/sim-transcribe/simulated-transcripts.ts`
@@ -123,6 +123,8 @@
   - 서버 세션 구현(WebSocket 서버측). 파일 기록, 회전, 삭제 감지, 설정 핫리로드, STT 포워딩 훅 포함.
 - `stt-forwarder.ts`
   - STT 전송 어댑터. WebSocket과 TCP 구현 제공(원격 STT로 바이너리 오디오 스트리밍). gRPC/MRCP는 스텁 상태.
+  - WebSocket: 연결/에러/종료 로깅, 선택적 초기/종료 메시지 전송, 주기 핑, 수신 텍스트/바이너리 로그(미리보기) 지원.
+  - TCP: 연결/종료/백프레셔 로깅, 선택적 INIT/BYE(hex) 전송, 프레이밍(raw/newline/len32) 지원, 수신 텍스트 로그(프레이밍 파싱) 지원.
 - `index.ts`
   - 서버 서브모듈 배럴.
 
@@ -170,8 +172,17 @@
 - `STT_ENCODING`(`L16` | `PCMU`): 전송 오디오 인코딩.
 - `STT_RATE`(8000|16000|44100|48000): 샘플레이트.
 - `STT_MONO`(true/false): 모노 전송 여부(true면 0번 채널만 전송).
+- WebSocket 옵션(선택):
+  - `STT_WS_INIT_JSON`: 연결 직후 보낼 텍스트(JSON) 페이로드.
+  - `STT_WS_BYE_JSON`: 종료 전 보낼 텍스트(JSON) 페이로드.
+  - `STT_WS_PING_SEC`: 주기 핑 간격(초).
+  - `STT_WS_LOG_ASCII`=1: 수신 텍스트 로그에서 비ASCII 문자를 `\uXXXX`로 이스케이프(콘솔 인코딩 문제 회피용).
+- TCP 옵션(선택):
+  - `STT_TCP_FRAMING` = `raw` | `newline` | `len32`: 송수신 프레이밍 모드.
+  - `STT_TCP_INIT_HEX`: 연결 직후 보낼 헥스 문자열.
+  - `STT_TCP_BYE_HEX`: 종료 전에 보낼 헥스 문자열.
 
-주의: 외부 STT 서버의 핸드셰이크/프레이밍 요구사항(초기 메시지, 메타데이터, 바이너리 프레임 포맷 등)은 서비스별로 다릅니다. 현재 구현은 연결 후 바로 바이너리 오디오 프레임을 전송하도록 설계되어 있으며, 필요 시 프로토콜에 맞춰 `audiohook/src/server/stt-forwarder.ts`를 확장하세요. TCP 구현은 원시 바이트 스트리밍만 수행합니다(별도 헤더/프레이밍 미포함).
+주의: 외부 STT 서버의 핸드셰이크/프레이밍 요구사항(초기 메시지, 메타데이터, 바이너리 프레임 포맷 등)은 서비스별로 다릅니다. 현재 구현은 설정에 따라 프레이밍(raw/newline/len32) 및 초기/종료 페이로드를 지원합니다. 필요 시 프로토콜에 맞춰 `audiohook/src/server/stt-forwarder.ts`를 확장하세요.
 
 ### 녹음(파일 기록)
 - `RECORDING_TO_FILE_ENABLED`(true/false): WAV 파일 기록 on/off.
@@ -186,4 +197,14 @@
 - 파일 회전: `src/rotating-file-transport.js` 커스텀 트랜스포트 워커(CommonJS) 사용.
   - 파일명: `prefix-YYYY-MM-DD.log`, 크기 초과 시 `prefix-YYYY-MM-DD-1.log`처럼 증가.
   - 날짜 변경 시 자동 회전, 보존일수 초과 파일 정리.
-- 참고: `src/utils/rotating-log-stream.ts`는 동일 컨셉의 TypeScript 버전으로 현재 미사용(향후 교체/테스트 용도 보관).
+- 참고: pretty 출력물을 회전 파일로 기록하는 대체 트랜스포트(`src/pretty-rotating-file-transport.js`)도 포함되어 있으나, 기본 설정은 파일을 JSON 라인으로 기록합니다.
+
+---
+
+## 테스트 서버/도구
+- `stt_websocket_test/server.js`
+  - 간단한 STT WebSocket 테스트 서버. 텍스트/바이너리 수신 로그, `{"type":"init"}`/`{"type":"bye"}` 처리, 3초마다 한글 텍스트 전송.
+  - 환경변수: `PORT`(또는 `STT_TEST_PORT`), `WS_PATH`(기본 `/stt`).
+- `stt_tcp_test/server.js`
+  - 간단한 STT TCP 테스트 서버. 프레이밍(raw/newline/len32) 지원, 3초마다 한글 텍스트 전송, 수신 바이트 로그.
+  - 환경변수: `PORT`(또는 `STT_TEST_TCP_PORT`), `TCP_FRAMING`, `INIT_HEX`, `BYE_HEX`.
