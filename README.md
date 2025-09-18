@@ -71,9 +71,15 @@ STT_WS_BYE_JSON={"type":"bye"}
 - 파일명 규칙: `logs/<prefix>-YYYY-MM-DD[-N].log` (기본 prefix=app)
 
 ## 테스트 서버
+- Client Data 생성기 `client_data_generator/client_data_generator/run_client.cmd`
+  - 음성 데이터 생성기
+  - 로컬 wav 파일을 재생하려면 아래와 같이 cmd 파일 수정
+    --> npm start -- --uri wss://audiohook.i4way.co.kr/api/v1/audiohook/ws --api-key R2VuZXN5c2Nsb3Vk --client-secret YTEyMzQ1Njc4OQ== 
+    --wavfile C:\cti\001-ed_sheeran_-_shape_of_you.wav
 - WebSocket 테스트: `stt_websocket_test/server.js`
   - Env: PORT(또는 STT_TEST_PORT), WS_PATH(기본 /stt)
   - 기능: 텍스트/바이너리 수신 로그, INIT/bye 처리, 3초마다 한글 텍스트 송신
 - TCP 테스트: `stt_tcp_test/server.js`
   - Env: PORT(또는 STT_TEST_TCP_PORT), TCP_FRAMING(raw|len32|newline), INIT_HEX, BYE_HEX
   - 기능: 프레이밍별 수신/송신, 3초마다 한글 텍스트 송신
+
