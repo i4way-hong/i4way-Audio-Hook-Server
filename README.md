@@ -78,21 +78,21 @@ STT_WS_BYE_JSON={"type":"bye"}
     --wavfile C:\cti\001-ed_sheeran_-_shape_of_you.wav
 
   ### 클라이언트 실행 옵션 요약 (index.ts)
-  -[serveruri] 또는 --uri <uri>: AudioHook 서버 WS/WSS URI
-  -wavfile <path>: 전송할 WAV 파일 경로(미지정 시 톤 발생기 사용)
-  -api-key <apikey>: API Key (Base64-url 세트 형식)
-  -client-secret <base64>: 메시지 서명용 클라이언트 시크릿(Base64)
-  -custom-config <json>: open 메시지의 customConfig로 전달할 JSON 문자열
-  -language <code>: 테스트에 사용할 언어 코드
-  -supported-languages: 서버의 지원 언어 목록 조회
-  -session-count <n>: 동시 세션 수 (기본 1, 1~1024)
-  -max-stream-duration <sec|ptxs>: 오디오 전송 최대 지속시간(초 또는 ISO-8601 PTxS)</sec|ptxs>
-  -connection-probe: 프로브만 수행(오디오는 max-stream-duration 지정 시에만 송신). --wavfile와 동시 사용 불가
-  -orgid <uuid>: 조직(테넌트) ID UUID (미지정 시 랜덤 생성)
-  -connection-rate <rps>: 초당 세션 생성 평균 속도(기본 50, 0.1~10000)
-  -session-log-level <level>: 세션 로그 레벨(fatal|error|warn|info|debug|trace, 기본 info)
-  -wavfile 미지정 시 톤 소스 사용.
-  -connection-probe와 --wavfile은 상호 배타.
+  - [serveruri] 또는 --uri <uri>: AudioHook 서버 WS/WSS URI
+  - wavfile <path>: 전송할 WAV 파일 경로(미지정 시 톤 발생기 사용)
+  - api-key <apikey>: API Key (Base64-url 세트 형식)
+  - client-secret <base64>: 메시지 서명용 클라이언트 시크릿(Base64)
+  - custom-config <json>: open 메시지의 customConfig로 전달할 JSON 문자열
+  - language <code>: 테스트에 사용할 언어 코드
+  - supported-languages: 서버의 지원 언어 목록 조회
+  - session-count <n>: 동시 세션 수 (기본 1, 1~1024)
+  - max-stream-duration <sec|ptxs>: 오디오 전송 최대 지속시간(초 또는 ISO-8601 PTxS)</sec|ptxs>
+  - connection-probe: 프로브만 수행(오디오는 max-stream-duration 지정 시에만 송신). --wavfile와 동시 사용 불가
+  - orgid <uuid>: 조직(테넌트) ID UUID (미지정 시 랜덤 생성)
+  - connection-rate <rps>: 초당 세션 생성 평균 속도(기본 50, 0.1~10000)
+  - session-log-level <level>: 세션 로그 레벨(fatal|error|warn|info|debug|trace, 기본 info)
+  - wavfile 미지정 시 톤 소스 사용.
+  - connection-probe와 --wavfile은 상호 배타.
 
   ### WebSocket 테스트: `stt_websocket_test/server.js`
   - Env: PORT(또는 STT_TEST_PORT), WS_PATH(기본 /stt)
