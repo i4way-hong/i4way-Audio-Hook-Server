@@ -15,11 +15,35 @@ import {
     OnMediaSourceResumedHandler,
     StreamDuration,
 } from '../../audiohook';
+import { ulawFromL16 } from '../../audiohook';
 
-// 200ms of a mono and stereo 1kHz tone at 8kHz sample rate in u-law
+// 200ms tone frames at 8kHz sample rate in u-law
 const toneFrameDurationMs = 200;
-const tone1kHz8kUlaw1ch = Uint8Array.from(new Array(toneFrameDurationMs).fill([0xFF, 0x0D, 0x06, 0x0D, 0xFF, 0x8D, 0x86, 0x8D]).flat());
-const tone1kHz8kUlaw2ch = Uint8Array.from(new Array(toneFrameDurationMs).fill([0xFF, 0xFF, 0x0D, 0x0D, 0x06, 0x06, 0x0D, 0x0D, 0xFF, 0xFF, 0x8D, 0x8D, 0x86, 0x86, 0x8D, 0x8D]).flat());
+const TONE_SAMPLE_RATE = 8000 as const;
+const samplesPerFrame = Math.trunc((toneFrameDurationMs * TONE_SAMPLE_RATE) / 1000); // 1600
+
+// Generate u-law sine wave for one channel
+const genUlawSine = (freqHz: number, samples: number, amp = 10000, rate = TONE_SAMPLE_RATE): Uint8Array => {
+    const l16 = new Int16Array(samples);
+    const w = 2 * Math.PI * freqHz / rate;
+    for (let i = 0; i < samples; i++) {
+        l16[i] = Math.round(amp * Math.sin(w * i));
+    }
+    return ulawFromL16(l16);
+};
+
+// Precompute mono 1kHz and stereo (CH1=1kHz, CH2=1.2kHz) interleaved u-law frames
+const tone1kHz8kUlaw1ch = genUlawSine(1000, samplesPerFrame);
+const toneCh1_1k_Ch2_1_2k_Ulaw2ch = (() => {
+    const ch1 = genUlawSine(1000, samplesPerFrame);
+    const ch2 = genUlawSine(1200, samplesPerFrame);
+    const out = new Uint8Array(samplesPerFrame * 2);
+    for (let i = 0, s = 0; i < samplesPerFrame; i++, s += 2) {
+        out[s] = ch1[i];
+        out[s + 1] = ch2[i];
+    }
+    return out;
+})();
 
 class MediaSourceTone1kHz extends EventEmitter implements MediaSource {
     readonly offeredMedia: MediaParameters;
@@ -79,7 +103,7 @@ class MediaSourceTone1kHz extends EventEmitter implements MediaSource {
         const samplesPerFrame = Math.trunc((this.frameDurationMs*this.sampleRate)/1000);
         if(this.selectedMedia) {
             const channels = this.selectedMedia.channels.length;
-            const audioFrame = (channels === 2) ? tone1kHz8kUlaw2ch : tone1kHz8kUlaw1ch;
+            const audioFrame = (channels === 2) ? toneCh1_1k_Ch2_1_2k_Ulaw2ch : tone1kHz8kUlaw1ch;
             handler = () => {
                 const sampleCount = Math.min(this.sampleEndPos - this.samplePos, samplesPerFrame);
                 if(this.state === 'STREAMING') {

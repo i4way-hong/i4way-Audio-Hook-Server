@@ -10,12 +10,20 @@
  * Env vars:
  * - PORT or STT_TEST_PORT (default: 8080)
  * - WS_PATH or PATHNAME (default: /stt)
+ * - AUDIO_ENCODING (default: PCMU)
+ * - CHANNELS (default: 1)
+ * - LOG_SAMPLES (default: 8)
  */
 const http = require('http');
 const { WebSocketServer } = require('ws');
 
 const PORT = parseInt(process.env.PORT || process.env.STT_TEST_PORT || '8080', 10);
 const WS_PATH = process.env.WS_PATH || process.env.PATHNAME || '/stt';
+// 추가: 바이너리 오디오 해석 설정
+const AUDIO_ENCODING = (process.env.AUDIO_ENCODING || 'PCMU').toUpperCase(); // 'PCMU' | 'L16'
+const CHANNELS = Math.max(1, parseInt(process.env.CHANNELS || '1', 10));
+const BYTES_PER_SAMPLE = AUDIO_ENCODING === 'L16' ? 2 : 1;
+const LOG_SAMPLES = Math.max(0, parseInt(process.env.LOG_SAMPLES || '8', 10));
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
@@ -38,6 +46,13 @@ wss.on('connection', (ws, req) => {
     let frames = 0;
     let texts = 0;
     let sentTexts = 0;
+
+    // 추가: 채널별(rx/tx) 집계 & 미리보기 버퍼
+    let rxSamples = 0;
+    const rxChBytes = Array.from({ length: CHANNELS }, () => 0);
+    const chLabels = CHANNELS === 1 ? ['RX'] : ['RX', 'TX', ...Array.from({ length: Math.max(0, CHANNELS - 2) }, (_, i) => `CH${i + 2}`)];
+    const resetPreviews = () => Array.from({ length: CHANNELS }, () => []);
+    let previews = resetPreviews();
 
     // 연결 직후 안내 메시지 전송
     try {
@@ -70,9 +85,27 @@ wss.on('connection', (ws, req) => {
 
     ws.on('message', (data, isBinary) => {
         if (isBinary) {
-            const len = Buffer.isBuffer(data) ? data.length : (data?.byteLength || 0);
+            const buf = Buffer.isBuffer(data) ? data : (Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data));
+            const len = buf.length;
             bytes += len;
             frames += 1;
+            // 채널 분리 집계
+            const strideBytes = CHANNELS * BYTES_PER_SAMPLE;
+            const samples = Math.floor(len / strideBytes);
+            rxSamples += samples;
+            for (let i = 0; i < samples; i++) {
+                for (let ch = 0; ch < CHANNELS; ch++) {
+                    const off = (i * strideBytes) + (ch * BYTES_PER_SAMPLE);
+                    rxChBytes[ch] += BYTES_PER_SAMPLE;
+                    if (LOG_SAMPLES && previews[ch].length < LOG_SAMPLES) {
+                        if (BYTES_PER_SAMPLE === 1) {
+                            previews[ch].push(buf[off]);
+                        } else {
+                            previews[ch].push(buf.readInt16LE(off));
+                        }
+                    }
+                }
+            }
             return;
         }
         texts += 1;
@@ -102,11 +135,25 @@ wss.on('connection', (ws, req) => {
 
     const timer = setInterval(() => {
         if (ws.readyState === ws.OPEN) {
-            console.log(`[stats] rxFrames=${frames} rxBytes=${bytes} rxTexts=${texts} txTexts=${sentTexts}`);
+            // 채널 미리보기 문자열 구성
+            const prevParts = previews.map((arr, idx) => {
+                const label = chLabels[idx] || `CH${idx}`;
+                const shown = arr.length ? arr : [];
+                const rendered = shown.map(v => (typeof v === 'number' ? v : String(v))).join(',');
+                return `${label}[${rendered}]`;
+            });
+            const chStats = rxChBytes.map((b, idx) => `${chLabels[idx] || `CH${idx}`}:${b}`).join(' ');
+            console.log(`[stats] rxFrames=${frames} rxBytes=${bytes} rxSamples=${rxSamples} rxTexts=${texts} ${chStats} txTexts=${sentTexts} previews=${prevParts.join(' | ')}`);
+            // reset window
             frames = 0;
             bytes = 0;
             texts = 0;
             sentTexts = 0;
+            rxSamples = 0;
+            for (let i = 0; i < CHANNELS; i++) {
+                rxChBytes[i] = 0;
+            }
+            previews = resetPreviews();
         } else {
             clearInterval(timer);
         }
