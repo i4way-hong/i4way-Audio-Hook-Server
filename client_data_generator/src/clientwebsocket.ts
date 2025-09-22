@@ -1,6 +1,6 @@
 import { URL } from 'url';
 import { WebSocket } from 'ws';
-import { ClientWebSocketFactory, httpsignature } from '../../app/audiohook';
+import { ClientWebSocketFactory, httpsignature } from '../../audiohook';
 
 export const createClientWebSocket: ClientWebSocketFactory = ({
     uri, 

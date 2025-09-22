@@ -21,7 +21,7 @@ import {
     OnMediaSourceResumedHandler,
     StreamDuration,
     WavReader,
-} from '../../app/audiohook';
+} from '../../audiohook';
 
 class MediaSourceWav extends EventEmitter implements MediaSource {
     readonly offeredMedia: MediaParameters;

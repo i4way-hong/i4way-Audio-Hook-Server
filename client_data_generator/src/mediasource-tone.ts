@@ -14,7 +14,7 @@ import {
     OnMediaSourcePausedHandler,
     OnMediaSourceResumedHandler,
     StreamDuration,
-} from '../../app/audiohook';
+} from '../../audiohook';
 
 // 200ms of a mono and stereo 1kHz tone at 8kHz sample rate in u-law
 const toneFrameDurationMs = 200;

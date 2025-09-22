@@ -10,7 +10,7 @@ import {
     JsonObject,
     MediaSource,
     StreamDuration
-} from '../../app/audiohook';
+} from '../../audiohook';
 import { createClientWebSocket } from './clientwebsocket';
 import { createWavMediaSource } from './mediasource-wav';
 import { createToneMediaSource } from './mediasource-tone';
@@ -267,10 +267,10 @@ new Command()
                     clientSecret: options.clientSecret ?? null
                 },
             });
-            session.on('event', (parameters) => {
+            session.on('event', (parameters: JsonObject) => {
                 sessionLogger.info(`Event message: ${JSON.stringify(parameters, null, 1)}`);
             });
-            session.on('rttInfo', (rtt) => {
+            session.on('rttInfo', (rtt: number) => {
                 roundTripTimeDigest.push(rtt);
             });
             session.once('disconnected', () => {
