@@ -16,6 +16,28 @@
  */
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const fs = require('fs');
+const path = require('path');
+
+// .env 로더: 현재 디렉터리의 .env를 읽어 process.env에 주입
+(function loadDotEnv() {
+  try {
+    const p = path.resolve(__dirname, '.env');
+    const txt = fs.readFileSync(p, 'utf8');
+    for (const raw of txt.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!m) continue;
+      const k = m[1];
+      let v = m[2];
+      const hashAt = v.indexOf(' #');
+      if (hashAt !== -1) v = v.slice(0, hashAt);
+      v = v.replace(/^['"]|['"]$/g, '').trim();
+      if (process.env[k] === undefined) process.env[k] = v;
+    }
+  } catch {}
+})();
 
 const PORT = parseInt(process.env.PORT || process.env.STT_TEST_PORT || '8080', 10);
 const WS_PATH = process.env.WS_PATH || process.env.PATHNAME || '/stt';
@@ -24,6 +46,30 @@ const AUDIO_ENCODING = (process.env.AUDIO_ENCODING || 'PCMU').toUpperCase(); // 
 const CHANNELS = Math.max(1, parseInt(process.env.CHANNELS || '1', 10));
 const BYTES_PER_SAMPLE = AUDIO_ENCODING === 'L16' ? 2 : 1;
 const LOG_SAMPLES = Math.max(0, parseInt(process.env.LOG_SAMPLES || '8', 10));
+
+console.log(`[config] PORT=${PORT} WS_PATH=${WS_PATH} CHANNELS=${CHANNELS} AUDIO_ENCODING=${AUDIO_ENCODING} LOG_SAMPLES=${LOG_SAMPLES}`);
+
+function makeCaptureDir() {
+    const dir = path.resolve(__dirname, 'captures');
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    return dir;
+}
+
+function makeCaptureWriters(req, baseExt) {
+    const dir = makeCaptureDir();
+    const ts = new Date();
+    const stamp = `${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}${String(ts.getSeconds()).padStart(2,'0')}_${String(ts.getMilliseconds()).padStart(3,'0')}`;
+    const ip = `${req.socket.remoteAddress?.replace(/[:\\]/g,'_') || 'unknown'}-${req.socket.remotePort || 'p'}`;
+    const base = `ws_${stamp}_${ip}`;
+    const ext = baseExt;
+    const combinedPath = path.join(dir, `${base}_combined.${ext}`);
+    const rxPath = path.join(dir, `${base}_rx.${ext}`);
+    const txPath = path.join(dir, `${base}_tx.${ext}`);
+    const combined = fs.createWriteStream(combinedPath);
+    const rx = fs.createWriteStream(rxPath);
+    const tx = fs.createWriteStream(txPath);
+    return { dir, combinedPath, rxPath, txPath, combined, rx, tx };
+}
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
@@ -53,6 +99,30 @@ wss.on('connection', (ws, req) => {
     const chLabels = CHANNELS === 1 ? ['RX'] : ['RX', 'TX', ...Array.from({ length: Math.max(0, CHANNELS - 2) }, (_, i) => `CH${i + 2}`)];
     const resetPreviews = () => Array.from({ length: CHANNELS }, () => []);
     let previews = resetPreviews();
+
+    // 캡처 준비
+    const ext = AUDIO_ENCODING === 'L16' ? 'l16' : 'pcmu';
+    const caps = makeCaptureWriters(req, ext);
+
+    const writeDeinterleaved = (buf) => {
+        try { caps.combined.write(buf); } catch {}
+        const stride = CHANNELS * BYTES_PER_SAMPLE;
+        const samples = Math.floor(buf.length / stride);
+        if (samples <= 0) return;
+        for (let i = 0; i < samples; i++) {
+            const base = i * stride;
+            // CH0 -> RX
+            const off0 = base + (0 * BYTES_PER_SAMPLE);
+            const ch0 = buf.subarray(off0, off0 + BYTES_PER_SAMPLE);
+            try { caps.rx.write(ch0); } catch {}
+            // CH1 -> TX (존재 시)
+            if (CHANNELS >= 2) {
+                const off1 = base + (1 * BYTES_PER_SAMPLE);
+                const ch1 = buf.subarray(off1, off1 + BYTES_PER_SAMPLE);
+                try { caps.tx.write(ch1); } catch {}
+            }
+        }
+    };
 
     // 연결 직후 안내 메시지 전송
     try {
@@ -106,6 +176,7 @@ wss.on('connection', (ws, req) => {
                     }
                 }
             }
+            writeDeinterleaved(buf);
             return;
         }
         texts += 1;
@@ -127,6 +198,10 @@ wss.on('connection', (ws, req) => {
         const r = Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason || '');
         console.log(`[close] code=${code} reason=${r}`);
         clearInterval(speakTimer);
+        try { caps.combined.end(); } catch {}
+        try { caps.rx.end(); } catch {}
+        try { caps.tx.end(); } catch {}
+        console.log(`[capture] saved: combined=${caps.combinedPath} rx=${caps.rxPath} tx=${caps.txPath}`);
     });
 
     ws.on('error', (err) => {

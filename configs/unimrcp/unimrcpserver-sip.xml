@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<unimrcpserver>
+  <!-- UniMRCP Server Template (MRCPv2 over SIP) -->
+  <sip-ua>
+    <local-ip>0.0.0.0</local-ip>
+    <local-port>5060</local-port>
+    <transport>udp</transport> <!-- udp | tcp | tls -->
+    <user>unimrcp</user>
+    <realm>example.local</realm>
+    <!-- 필요 시 registrar/proxy 설정 추가
+    <registrar>sip:proxy.example.local</registrar>
+    <outbound-proxy>sip:proxy.example.local:5060;transport=udp</outbound-proxy>
+    -->
+  </sip-ua>
+
+  <rtp-settings>
+    <ip>0.0.0.0</ip>
+    <rtp-port-min>40000</rtp-port-min>
+    <rtp-port-max>40100</rtp-port-max>
+    <ptime>20</ptime>
+  </rtp-settings>
+
+  <plugins>
+    <plugin>demo-recog</plugin>
+    <plugin>demo-synth</plugin>
+  </plugins>
+</unimrcpserver>

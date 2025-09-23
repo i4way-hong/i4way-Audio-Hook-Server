@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<client-profiles>
+  <!-- UniMRCP Client Profile Template (ASR over MRCPv2 / SIP) -->
+  <profile name="asr-sip" version="1.0">
+    <sip-server ip="127.0.0.1" port="5060" transport="udp" />
+    <rtp>
+      <local-ip>0.0.0.0</local-ip>
+      <rtp-port-min>40000</rtp-port-min>
+      <rtp-port-max>40100</rtp-port-max>
+      <ptime>20</ptime>
+    </rtp>
+    <recognizer>
+      <codec>PCMU</codec> <!-- or L16 -->
+      <sample-rate>8000</sample-rate>
+      <channel-count>1</channel-count>
+      <vendor-specific/>
+      <timeout>5000</timeout>
+      <no-input-timeout>5000</no-input-timeout>
+      <speech-complete-timeout>1000</speech-complete-timeout>
+    </recognizer>
+  </profile>
+</client-profiles>

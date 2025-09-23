@@ -57,6 +57,28 @@ function frame(buf) {
   }
 }
 
+function makeCaptureDir() {
+  const dir = path.resolve(__dirname, 'captures');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+
+function makeCaptureWriters(socket, baseExt) {
+  const dir = makeCaptureDir();
+  const ts = new Date();
+  const stamp = `${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}_${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}${String(ts.getSeconds()).padStart(2,'0')}_${String(ts.getMilliseconds()).padStart(3,'0')}`;
+  const ip = `${socket.remoteAddress?.replace(/[:\\]/g,'_') || 'unknown'}-${socket.remotePort || 'p'}`;
+  const base = `tcp_${stamp}_${ip}`;
+  const ext = baseExt;
+  const combinedPath = path.join(dir, `${base}_combined.${ext}`);
+  const rxPath = path.join(dir, `${base}_rx.${ext}`);
+  const txPath = path.join(dir, `${base}_tx.${ext}`);
+  const combined = fs.createWriteStream(combinedPath);
+  const rx = fs.createWriteStream(rxPath);
+  const tx = fs.createWriteStream(txPath);
+  return { dir, combinedPath, rxPath, txPath, combined, rx, tx };
+}
+
 const server = net.createServer((socket) => {
   const ip = `${socket.remoteAddress}:${socket.remotePort}`;
   console.log(`[conn] ${ip}`);
@@ -70,6 +92,31 @@ const server = net.createServer((socket) => {
   const chLabels = CHANNELS === 1 ? ['RX'] : ['RX', 'TX', ...Array.from({ length: Math.max(0, CHANNELS - 2) }, (_, i) => `CH${i + 2}`)];
   const resetPreviews = () => Array.from({ length: CHANNELS }, () => []);
   let previews = resetPreviews();
+
+  // 파일 캡처 준비
+  const ext = AUDIO_ENCODING === 'L16' ? 'l16' : 'pcmu';
+  const caps = makeCaptureWriters(socket, ext);
+
+  function writeDeinterleaved(buf) {
+    // 원본 저장
+    try { caps.combined.write(buf); } catch {}
+    const stride = CHANNELS * BYTES_PER_SAMPLE;
+    const samples = Math.floor(buf.length / stride);
+    if (samples <= 0) return;
+    for (let i = 0; i < samples; i++) {
+      const base = i * stride;
+      // CH0 -> RX
+      const off0 = base + (0 * BYTES_PER_SAMPLE);
+      const ch0 = buf.subarray(off0, off0 + BYTES_PER_SAMPLE);
+      try { caps.rx.write(ch0); } catch {}
+      // CH1 -> TX (존재 시)
+      if (CHANNELS >= 2) {
+        const off1 = base + (1 * BYTES_PER_SAMPLE);
+        const ch1 = buf.subarray(off1, off1 + BYTES_PER_SAMPLE);
+        try { caps.tx.write(ch1); } catch {}
+      }
+    }
+  }
 
   // send INIT_HEX if provided
   if (process.env.INIT_HEX) {
@@ -108,11 +155,16 @@ const server = net.createServer((socket) => {
         }
       }
     }
+    writeDeinterleaved(buf);
   });
 
   socket.on('close', () => {
     console.log(`[close] ${ip}`);
     clearInterval(speakTimer);
+    try { caps.combined.end(); } catch {}
+    try { caps.rx.end(); } catch {}
+    try { caps.tx.end(); } catch {}
+    console.log(`[capture] saved: combined=${caps.combinedPath} rx=${caps.rxPath} tx=${caps.txPath}`);
     if (process.env.BYE_HEX) {
       try { socket.write(Buffer.from(process.env.BYE_HEX.replace(/[^0-9a-fA-F]/g, ''), 'hex')); } catch {}
     }

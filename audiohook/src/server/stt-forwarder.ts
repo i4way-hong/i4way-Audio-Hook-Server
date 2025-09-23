@@ -1,12 +1,15 @@
 import WebSocket from 'ws';
-import sttConfig, { SttProtocol, SttEncoding, TcpFraming } from '../utils/stt-config';
+import sttConfig, { SttProtocol, SttEncoding, TcpFraming, WsMode } from '../utils/stt-config';
 import { Logger } from '../utils/logger';
 import { MediaDataFrame } from './mediadata';
 import { ulawFromL16 } from '../audio/ulaw';
 import { Socket } from 'net';
+import tls from 'tls';
 import { resampleL16 } from '../audio/resample';
 import { createAudioFrame } from '../audio';
 import { TextDecoder } from 'util';
+import { readFileSync } from 'fs';
+import { getVendorPlugin, SttVendorPlugin } from './stt-vendor-plugin';
 
 export interface SttForwarder {
     start(): Promise<void>;
@@ -72,22 +75,15 @@ class WebSocketForwarder implements SttForwarder {
     private pingTimer: NodeJS.Timer | null = null;
     private readonly logger: Logger;
     private warnedRateMismatch = false;
+    private vendor: SttVendorPlugin | null = null;
+    private wsReconnectTimer: NodeJS.Timeout | null = null;
+    private wsReconnectDelayMs: number | null = null;
 
     constructor(logger: Logger) {
         this.logger = logger;
-    }
-
-    private maybeSendInit(): void {
-        const payload = sttConfig.wsInitJson;
-        if (!payload) {
-            return;
-        }
-        try {
-            this.ws?.send(payload);
-            this.logger.debug('STT WS init sent');
-        } catch (e) {
-            this.logger.warn(`STT WS init send failed: ${(e as Error).message}`);
-        }
+        this.vendor = getVendorPlugin(sttConfig.vendorPlugin ?? null, (m) => this.logger.debug(m));
+        const init = sttConfig.reconnectInitialMs ?? 500;
+        this.wsReconnectDelayMs = Math.max(10, init);
     }
 
     private schedulePing(): void {
@@ -107,8 +103,27 @@ class WebSocketForwarder implements SttForwarder {
         this.pingTimer = timer as unknown as NodeJS.Timer;
     }
 
+    private maybeSendInit(): void {
+        let payload = this.vendor?.wsInit?.();
+        if (payload === undefined || payload === null) {
+            payload = sttConfig.wsInitJson ?? undefined;
+        }
+        if (!payload) {
+            return;
+        }
+        try {
+            this.ws?.send(payload);
+            this.logger.debug('STT WS init sent');
+        } catch (e) {
+            this.logger.warn(`STT WS init send failed: ${(e as Error).message}`);
+        }
+    }
+
     private sendBye(): void {
-        const payload = sttConfig.wsByeJson;
+        let payload = this.vendor?.wsBye?.();
+        if (payload === undefined || payload === null) {
+            payload = sttConfig.wsByeJson ?? undefined;
+        }
         if (!payload) {
             return;
         }
@@ -120,13 +135,34 @@ class WebSocketForwarder implements SttForwarder {
         }
     }
 
+    private resetWsBackoff(): void {
+        this.wsReconnectDelayMs = sttConfig.reconnectInitialMs ?? 500;
+    }
+
+    private scheduleWsReconnect(): void {
+        if (!sttConfig.reconnectEnabled) {
+            return;
+        }
+        const max = sttConfig.reconnectMaxMs ?? 10000;
+        const factor = sttConfig.reconnectFactor ?? 2.0;
+        const delay = Math.min(Math.max(10, this.wsReconnectDelayMs ?? 500), max);
+        if (this.wsReconnectTimer) {
+            clearTimeout(this.wsReconnectTimer);
+        }
+        this.logger.warn(`STT WS reconnect in ${delay} ms`);
+        this.wsReconnectTimer = setTimeout(() => {
+            this.start().catch(() => undefined);
+        }, delay);
+        this.wsReconnectDelayMs = Math.min(max, Math.floor(delay * factor));
+    }
+
     async start(): Promise<void> {
         const url = sttConfig.endpoint;
         if (!url) {
             throw new Error('STT endpoint is not configured');
         }
         await new Promise<void>((resolve, reject) => {
-            const ws = new WebSocket(url, {
+            const ws = new WebSocket(url, sttConfig.wsSubprotocol ?? undefined, {
                 headers: {
                     ...(sttConfig.apiKey ? { Authorization: `Bearer ${sttConfig.apiKey}` } : {}),
                     ...(sttConfig.headers ?? {}),
@@ -135,13 +171,14 @@ class WebSocketForwarder implements SttForwarder {
             ws.on('open', () => {
                 this.logger.info(`STT WS connected: ${url}`);
                 this.ws = ws;
+                this.resetWsBackoff();
                 this.maybeSendInit();
                 this.schedulePing();
                 resolve();
             });
             ws.on('message', (data, isBinary) => {
                 try {
-                    if (isBinary) {
+                    if (isBinary && sttConfig.wsMode === 'binary') {
                         const len = Buffer.isBuffer(data) ? data.length : Array.isArray(data) ? Buffer.concat(data as Buffer[]).length : (data as ArrayBuffer).byteLength;
                         this.logger.debug(`STT WS recv binary (${len} bytes)`);
                     } else {
@@ -155,6 +192,10 @@ class WebSocketForwarder implements SttForwarder {
                             text = decoder.decode(Buffer.concat(data as Buffer[]));
                         } else {
                             text = decoder.decode(new Uint8Array(data as ArrayBuffer));
+                        }
+                        const parsed = this.vendor?.parseIncomingText?.(text);
+                        if (parsed?.text) {
+                            this.logger.info(`STT WS parsed text: ${parsed.text}`);
                         }
                         const preview = text.length > 200 ? `${text.slice(0, 200)}…` : text;
                         const asciiOnly = process.env['STT_WS_LOG_ASCII'] === '1';
@@ -175,6 +216,7 @@ class WebSocketForwarder implements SttForwarder {
                     clearInterval(this.pingTimer);
                     this.pingTimer = null;
                 }
+                this.scheduleWsReconnect();
             });
         });
     }
@@ -183,6 +225,10 @@ class WebSocketForwarder implements SttForwarder {
         if (this.pingTimer) {
             clearInterval(this.pingTimer);
             this.pingTimer = null;
+        }
+        if (this.wsReconnectTimer) {
+            clearTimeout(this.wsReconnectTimer);
+            this.wsReconnectTimer = null;
         }
         this.sendBye();
         const ws = this.ws;
@@ -203,7 +249,26 @@ class WebSocketForwarder implements SttForwarder {
         }
         const payload = buildPayload(frame, this.logger, { rate: this.warnedRateMismatch });
         this.warnedRateMismatch = true; // 경고는 1회만
-        if (payload) {
+        if (!payload) {
+            return;
+        }
+        // Vendor transform first
+        const mode: WsMode | undefined = sttConfig.wsMode as WsMode;
+        const audioKey = sttConfig.wsJsonAudioKey ?? 'audio';
+        const transformed = this.vendor?.transformOutgoingWs?.(payload, (mode ?? 'binary'), {
+            encoding: sttConfig.encoding,
+            rate: sttConfig.rate,
+            mono: sttConfig.mono,
+            audioKey,
+        });
+        if (typeof transformed === 'string' || Buffer.isBuffer(transformed)) {
+            ws.send(transformed as string | Buffer);
+            return;
+        }
+        if (mode === 'json-base64') {
+            const obj = { [audioKey]: payload.toString('base64') } as Record<string, unknown>;
+            ws.send(JSON.stringify(obj));
+        } else {
             ws.send(payload);
         }
     }
@@ -222,9 +287,14 @@ class TcpForwarder implements SttForwarder {
     private waitingDrain = false;
     private endedByPeer = false;
     private inboundBuffer: Buffer = Buffer.alloc(0);
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private reconnectDelayMs: number | null = null;
+    private vendor: SttVendorPlugin | null = null;
 
     constructor(logger: Logger) {
         this.logger = logger;
+        this.vendor = getVendorPlugin(sttConfig.vendorPlugin ?? null, (m) => this.logger.debug(m));
+        this.reconnectDelayMs = Math.max(10, sttConfig.reconnectInitialMs ?? 500);
     }
 
     // 수신 텍스트 미리보기 로그
@@ -281,6 +351,25 @@ class TcpForwarder implements SttForwarder {
         }
     }
 
+    private resetTcpBackoff(): void {
+        this.reconnectDelayMs = sttConfig.reconnectInitialMs ?? 500;
+    }
+
+    private scheduleTcpReconnect(): void {
+        if (!sttConfig.reconnectEnabled) {
+            return;
+        }
+        const max = sttConfig.reconnectMaxMs ?? 10000;
+        const factor = sttConfig.reconnectFactor ?? 2.0;
+        const delay = Math.min(Math.max(10, this.reconnectDelayMs ?? 500), max);
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+        }
+        this.logger.warn(`STT TCP reconnect in ${delay} ms`);
+        this.reconnectTimer = setTimeout(() => this.start().catch(() => undefined), delay);
+        this.reconnectDelayMs = Math.min(max, Math.floor(delay * factor));
+    }
+
     async start(): Promise<void> {
         const ep = sttConfig.endpoint;
         if (!ep) {
@@ -288,8 +377,18 @@ class TcpForwarder implements SttForwarder {
         }
         const { host, port } = this.parseEndpoint(ep);
         await new Promise<void>((resolve, reject) => {
-            const sock = new Socket();
+            const useTls = !!sttConfig.tcpTlsEnabled;
+            const sock: Socket = useTls ? tls.connect({
+                host,
+                port,
+                servername: sttConfig.tcpTlsServername ?? host,
+                rejectUnauthorized: sttConfig.tcpTlsRejectUnauthorized !== false,
+                ca: sttConfig.tcpTlsCaFile ? [readFileSync(sttConfig.tcpTlsCaFile)] : undefined,
+                cert: sttConfig.tcpTlsCertFile ? readFileSync(sttConfig.tcpTlsCertFile) : undefined,
+                key: sttConfig.tcpTlsKeyFile ? readFileSync(sttConfig.tcpTlsKeyFile) : undefined,
+            }) as unknown as Socket : new Socket();
             sock.setNoDelay(true);
+            sock.setKeepAlive(true, 15000);
             const onDrain = () => {
                 if (!this.socket || this.waitingDrain === false) {
                     return;
@@ -309,8 +408,9 @@ class TcpForwarder implements SttForwarder {
                 this.waitingDrain = false;
             };
             sock.once('connect', () => {
-                this.logger.info(`STT TCP connected: ${host}:${port}`);
+                this.logger.info(`STT ${useTls ? 'TLS ' : ''}TCP connected: ${host}:${port}`);
                 this.socket = sock;
+                this.resetTcpBackoff();
                 this.waitingDrain = false;
                 this.endedByPeer = false;
                 this.writeQueue = [];
@@ -358,6 +458,15 @@ class TcpForwarder implements SttForwarder {
                     } catch {
                         // ignore
                     }
+                } else if (this.vendor?.tcpInit) {
+                    const init = this.vendor.tcpInit();
+                    if (init) {
+                        try {
+                            sock.write(init);
+                        } catch {
+                            // ignore
+                        }
+                    }
                 }
                 resolve();
             });
@@ -370,8 +479,11 @@ class TcpForwarder implements SttForwarder {
                 this.waitingDrain = false;
                 this.writeQueue = [];
                 this.inboundBuffer = Buffer.alloc(0);
+                this.scheduleTcpReconnect();
             });
-            sock.connect(port, host);
+            if (!useTls) {
+                sock.connect(port, host);
+            }
         });
     }
 
@@ -384,6 +496,15 @@ class TcpForwarder implements SttForwarder {
                     s.write(hexToBuffer(sttConfig.tcpByeHex));
                 } catch {
                     // ignore
+                }
+            } else if (this.vendor?.tcpBye) {
+                const bye = this.vendor.tcpBye();
+                if (bye) {
+                    try {
+                        s.write(bye);
+                    } catch {
+                        // ignore
+                    }
                 }
             }
             try {
@@ -401,6 +522,10 @@ class TcpForwarder implements SttForwarder {
         this.waitingDrain = false;
         this.writeQueue = [];
         this.endedByPeer = false;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
     }
 
     send(frame: MediaDataFrame): void {

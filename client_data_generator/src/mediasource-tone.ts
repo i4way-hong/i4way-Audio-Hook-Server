@@ -20,30 +20,41 @@ import { ulawFromL16 } from '../../audiohook';
 // 200ms tone frames at 8kHz sample rate in u-law
 const toneFrameDurationMs = 200;
 const TONE_SAMPLE_RATE = 8000 as const;
-const samplesPerFrame = Math.trunc((toneFrameDurationMs * TONE_SAMPLE_RATE) / 1000); // 1600
 
-// Generate u-law sine wave for one channel
-const genUlawSine = (freqHz: number, samples: number, amp = 10000, rate = TONE_SAMPLE_RATE): Uint8Array => {
-    const l16 = new Int16Array(samples);
-    const w = 2 * Math.PI * freqHz / rate;
-    for (let i = 0; i < samples; i++) {
-        l16[i] = Math.round(amp * Math.sin(w * i));
+// 동적 프레임 생성: startSample부터 count 샘플 생성, 채널 수에 따라 인터리브된 PCMU 프레임 반환
+function makeUlawToneFrame(startSample: number, count: number, channels: number): Uint8Array {
+    const RATE = TONE_SAMPLE_RATE;
+    const AMP = 10000;
+    if (channels <= 1) {
+        const l16 = new Int16Array(count);
+        const w1 = 2 * Math.PI * 1000 / RATE; // 1 kHz
+        for (let i = 0; i < count; i++) {
+            const n = startSample + i;
+            l16[i] = Math.round(AMP * Math.sin(w1 * n));
+        }
+        return ulawFromL16(l16);
     }
-    return ulawFromL16(l16);
-};
-
-// Precompute mono 1kHz and stereo (CH1=1kHz, CH2=1.2kHz) interleaved u-law frames
-const tone1kHz8kUlaw1ch = genUlawSine(1000, samplesPerFrame);
-const toneCh1_1k_Ch2_1_2k_Ulaw2ch = (() => {
-    const ch1 = genUlawSine(1000, samplesPerFrame);
-    const ch2 = genUlawSine(1200, samplesPerFrame);
-    const out = new Uint8Array(samplesPerFrame * 2);
-    for (let i = 0, s = 0; i < samplesPerFrame; i++, s += 2) {
-        out[s] = ch1[i];
-        out[s + 1] = ch2[i];
+    // 스테레오: CH0=1kHz 연속, CH1=1.6kHz 비프(400ms 주기, 50% duty)
+    const ch0 = new Int16Array(count);
+    const ch1 = new Int16Array(count);
+    const w0 = 2 * Math.PI * 1000 / RATE;  // 1 kHz
+    const w1 = 2 * Math.PI * 2600 / RATE;  // 2.6 kHz
+    const gatePeriod = Math.round(0.4 * RATE); // 400ms
+    for (let i = 0; i < count; i++) {
+        const n = startSample + i;
+        ch0[i] = Math.round(AMP * Math.sin(w0 * n));
+        const gated = (Math.floor(n / gatePeriod) % 2) === 0; // on/off
+        ch1[i] = gated ? Math.round(AMP * Math.sin(w1 * n)) : 0;
+    }
+    const u0 = ulawFromL16(ch0);
+    const u1 = ulawFromL16(ch1);
+    const out = new Uint8Array(count * 2);
+    for (let i = 0, s = 0; i < count; i++, s += 2) {
+        out[s] = u0[i];
+        out[s + 1] = u1[i];
     }
     return out;
-})();
+}
 
 class MediaSourceTone1kHz extends EventEmitter implements MediaSource {
     readonly offeredMedia: MediaParameters;
@@ -103,15 +114,12 @@ class MediaSourceTone1kHz extends EventEmitter implements MediaSource {
         const samplesPerFrame = Math.trunc((this.frameDurationMs*this.sampleRate)/1000);
         if(this.selectedMedia) {
             const channels = this.selectedMedia.channels.length;
-            const audioFrame = (channels === 2) ? toneCh1_1k_Ch2_1_2k_Ulaw2ch : tone1kHz8kUlaw1ch;
             handler = () => {
                 const sampleCount = Math.min(this.sampleEndPos - this.samplePos, samplesPerFrame);
                 if(this.state === 'STREAMING') {
-                    if(sampleCount < samplesPerFrame) {
-                        // Last frame, send partial
-                        this.emit('audio', audioFrame.slice(0, sampleCount * channels));
-                    } else {
-                        this.emit('audio', audioFrame);
+                    if(sampleCount > 0) {
+                        const frame = makeUlawToneFrame(this.samplePos, sampleCount, channels);
+                        this.emit('audio', frame);
                     }
                 }
                 this.samplePos += sampleCount;

@@ -7,6 +7,7 @@ export type SttProtocol = 'websocket' | 'tcp' | 'grpc' | 'mrcp';
 export type SttEncoding = 'L16' | 'PCMU';
 
 export type TcpFraming = 'raw' | 'len32' | 'newline';
+export type WsMode = 'binary' | 'json-base64';
 
 export type SttConfigState = {
     enabled: boolean;
@@ -21,12 +22,30 @@ export type SttConfigState = {
     wsInitJson?: string | null;
     wsPingSec?: number | null;
     wsByeJson?: string | null;
+    wsMode?: WsMode | string;
+    wsSubprotocol?: string | null;
+    wsJsonAudioKey?: string | null;
     // TCP framing/handshake/bye
     tcpFraming?: TcpFraming | string;
     tcpInitHex?: string | null;
     tcpByeHex?: string | null;
+    // TCP TLS
+    tcpTlsEnabled?: boolean;
+    tcpTlsRejectUnauthorized?: boolean;
+    tcpTlsServername?: string | null;
+    tcpTlsCaFile?: string | null;
+    tcpTlsCertFile?: string | null;
+    tcpTlsKeyFile?: string | null;
     // Resampling toggle
     resampleEnabled?: boolean;
+    // Reconnect
+    reconnectEnabled?: boolean;
+    reconnectInitialMs?: number | null;
+    reconnectMaxMs?: number | null;
+    reconnectFactor?: number | null;
+    // Vendor plugin
+    vendorPlugin?: string | null;
+    vendorParams?: string | null;
 };
 
 const DEFAULTS: SttConfigState = {
@@ -41,10 +60,25 @@ const DEFAULTS: SttConfigState = {
     wsInitJson: null,
     wsPingSec: null,
     wsByeJson: null,
+    wsMode: 'binary',
+    wsSubprotocol: null,
+    wsJsonAudioKey: 'audio',
     tcpFraming: 'raw',
     tcpInitHex: null,
     tcpByeHex: null,
+    tcpTlsEnabled: false,
+    tcpTlsRejectUnauthorized: true,
+    tcpTlsServername: null,
+    tcpTlsCaFile: null,
+    tcpTlsCertFile: null,
+    tcpTlsKeyFile: null,
     resampleEnabled: false,
+    reconnectEnabled: false,
+    reconnectInitialMs: 500,
+    reconnectMaxMs: 10000,
+    reconnectFactor: 2.0,
+    vendorPlugin: null,
+    vendorParams: null,
 };
 
 function parseBoolean(val: string | undefined, defaultValue: boolean): boolean {
@@ -99,6 +133,16 @@ function parseTcpFraming(val: string | undefined): TcpFraming | undefined {
     return undefined;
 }
 
+function parseWsMode(val: string | undefined): WsMode | undefined {
+    if (!val) {
+        return undefined;
+    }
+    if (val === 'binary' || val === 'json-base64') {
+        return val;
+    }
+    return undefined;
+}
+
 function loadFromEnvFile(envPath: string): Partial<SttConfigState> {
     try {
         if (!existsSync(envPath)) {
@@ -120,10 +164,25 @@ function loadFromEnvFile(envPath: string): Partial<SttConfigState> {
             wsInitJson: parsed['STT_WS_INIT_JSON'] ?? DEFAULTS.wsInitJson,
             wsPingSec: parseNumber(parsed['STT_WS_PING_SEC']) ?? DEFAULTS.wsPingSec,
             wsByeJson: parsed['STT_WS_BYE_JSON'] ?? DEFAULTS.wsByeJson,
+            wsMode: parseWsMode(parsed['STT_WS_MODE']) ?? DEFAULTS.wsMode,
+            wsSubprotocol: parsed['STT_WS_SUBPROTOCOL'] ?? DEFAULTS.wsSubprotocol,
+            wsJsonAudioKey: parsed['STT_WS_JSON_AUDIO_KEY'] ?? DEFAULTS.wsJsonAudioKey,
             tcpFraming: parseTcpFraming(parsed['STT_TCP_FRAMING']) ?? DEFAULTS.tcpFraming,
             tcpInitHex: parsed['STT_TCP_INIT_HEX'] ?? DEFAULTS.tcpInitHex,
             tcpByeHex: parsed['STT_TCP_BYE_HEX'] ?? DEFAULTS.tcpByeHex,
+            tcpTlsEnabled: parseBoolean(parsed['STT_TCP_TLS'], DEFAULTS.tcpTlsEnabled ?? false),
+            tcpTlsRejectUnauthorized: parseBoolean(parsed['STT_TCP_TLS_REJECT_UNAUTHORIZED'], DEFAULTS.tcpTlsRejectUnauthorized ?? true),
+            tcpTlsServername: parsed['STT_TCP_TLS_SERVERNAME'] ?? DEFAULTS.tcpTlsServername,
+            tcpTlsCaFile: parsed['STT_TCP_TLS_CA_FILE'] ?? DEFAULTS.tcpTlsCaFile,
+            tcpTlsCertFile: parsed['STT_TCP_TLS_CERT_FILE'] ?? DEFAULTS.tcpTlsCertFile,
+            tcpTlsKeyFile: parsed['STT_TCP_TLS_KEY_FILE'] ?? DEFAULTS.tcpTlsKeyFile,
             resampleEnabled: parseBoolean(parsed['STT_RESAMPLE_ENABLED'], DEFAULTS.resampleEnabled ?? false),
+            reconnectEnabled: parseBoolean(parsed['STT_RECONNECT_ENABLED'], DEFAULTS.reconnectEnabled ?? false),
+            reconnectInitialMs: parseNumber(parsed['STT_RECONNECT_INITIAL_MS']) ?? DEFAULTS.reconnectInitialMs,
+            reconnectMaxMs: parseNumber(parsed['STT_RECONNECT_MAX_MS']) ?? DEFAULTS.reconnectMaxMs,
+            reconnectFactor: parseNumber(parsed['STT_RECONNECT_FACTOR']) ?? DEFAULTS.reconnectFactor,
+            vendorPlugin: parsed['STT_VENDOR_PLUGIN'] ?? DEFAULTS.vendorPlugin,
+            vendorParams: parsed['STT_VENDOR_PARAMS'] ?? DEFAULTS.vendorParams,
         };
     } catch {
         return {};
@@ -166,6 +225,15 @@ function loadFromProcessEnv(): Partial<SttConfigState> {
     if (process.env['STT_WS_BYE_JSON'] !== undefined) {
         res.wsByeJson = process.env['STT_WS_BYE_JSON'] ?? null;
     }
+    if (process.env['STT_WS_MODE'] !== undefined) {
+        res.wsMode = parseWsMode(process.env['STT_WS_MODE']);
+    }
+    if (process.env['STT_WS_SUBPROTOCOL'] !== undefined) {
+        res.wsSubprotocol = process.env['STT_WS_SUBPROTOCOL'] ?? null;
+    }
+    if (process.env['STT_WS_JSON_AUDIO_KEY'] !== undefined) {
+        res.wsJsonAudioKey = process.env['STT_WS_JSON_AUDIO_KEY'] ?? null;
+    }
     if (process.env['STT_TCP_FRAMING'] !== undefined) {
         res.tcpFraming = parseTcpFraming(process.env['STT_TCP_FRAMING']);
     }
@@ -175,8 +243,44 @@ function loadFromProcessEnv(): Partial<SttConfigState> {
     if (process.env['STT_TCP_BYE_HEX'] !== undefined) {
         res.tcpByeHex = process.env['STT_TCP_BYE_HEX'] ?? null;
     }
+    if (process.env['STT_TCP_TLS'] !== undefined) {
+        res.tcpTlsEnabled = parseBoolean(process.env['STT_TCP_TLS'], DEFAULTS.tcpTlsEnabled ?? false);
+    }
+    if (process.env['STT_TCP_TLS_REJECT_UNAUTHORIZED'] !== undefined) {
+        res.tcpTlsRejectUnauthorized = parseBoolean(process.env['STT_TCP_TLS_REJECT_UNAUTHORIZED'], DEFAULTS.tcpTlsRejectUnauthorized ?? true);
+    }
+    if (process.env['STT_TCP_TLS_SERVERNAME'] !== undefined) {
+        res.tcpTlsServername = process.env['STT_TCP_TLS_SERVERNAME'] ?? null;
+    }
+    if (process.env['STT_TCP_TLS_CA_FILE'] !== undefined) {
+        res.tcpTlsCaFile = process.env['STT_TCP_TLS_CA_FILE'] ?? null;
+    }
+    if (process.env['STT_TCP_TLS_CERT_FILE'] !== undefined) {
+        res.tcpTlsCertFile = process.env['STT_TCP_TLS_CERT_FILE'] ?? null;
+    }
+    if (process.env['STT_TCP_TLS_KEY_FILE'] !== undefined) {
+        res.tcpTlsKeyFile = process.env['STT_TCP_TLS_KEY_FILE'] ?? null;
+    }
     if (process.env['STT_RESAMPLE_ENABLED'] !== undefined) {
         res.resampleEnabled = parseBoolean(process.env['STT_RESAMPLE_ENABLED'], DEFAULTS.resampleEnabled ?? false);
+    }
+    if (process.env['STT_RECONNECT_ENABLED'] !== undefined) {
+        res.reconnectEnabled = parseBoolean(process.env['STT_RECONNECT_ENABLED'], DEFAULTS.reconnectEnabled ?? false);
+    }
+    if (process.env['STT_RECONNECT_INITIAL_MS'] !== undefined) {
+        res.reconnectInitialMs = parseNumber(process.env['STT_RECONNECT_INITIAL_MS'] ?? undefined) ?? null;
+    }
+    if (process.env['STT_RECONNECT_MAX_MS'] !== undefined) {
+        res.reconnectMaxMs = parseNumber(process.env['STT_RECONNECT_MAX_MS'] ?? undefined) ?? null;
+    }
+    if (process.env['STT_RECONNECT_FACTOR'] !== undefined) {
+        res.reconnectFactor = parseNumber(process.env['STT_RECONNECT_FACTOR'] ?? undefined) ?? null;
+    }
+    if (process.env['STT_VENDOR_PLUGIN'] !== undefined) {
+        res.vendorPlugin = process.env['STT_VENDOR_PLUGIN'] ?? null;
+    }
+    if (process.env['STT_VENDOR_PARAMS'] !== undefined) {
+        res.vendorParams = process.env['STT_VENDOR_PARAMS'] ?? null;
     }
     return res;
 }
@@ -208,6 +312,11 @@ function validateAndNormalize(input: SttConfigState): SttConfigState {
             out.wsPingSec = null;
         }
     }
+    // ws mode
+    if (out.wsMode !== undefined && out.wsMode !== 'binary' && out.wsMode !== 'json-base64') {
+        console.warn(`[stt-config] Unknown WS mode: ${String(out.wsMode)}. Using binary.`);
+        out.wsMode = 'binary';
+    }
     // tcp framing
     if (out.tcpFraming !== undefined && out.tcpFraming !== 'raw' && out.tcpFraming !== 'len32' && out.tcpFraming !== 'newline') {
         console.warn(`[stt-config] Unknown TCP framing: ${String(out.tcpFraming)}. Using raw.`);
@@ -216,6 +325,13 @@ function validateAndNormalize(input: SttConfigState): SttConfigState {
     // hex payloads
     out.tcpInitHex = sanitizeHex(out.tcpInitHex);
     out.tcpByeHex = sanitizeHex(out.tcpByeHex);
+    // reconnect bounds
+    if (out.reconnectInitialMs && out.reconnectInitialMs < 10) {
+        out.reconnectInitialMs = 10;
+    }
+    if (out.reconnectMaxMs && out.reconnectMaxMs < (out.reconnectInitialMs ?? 10)) {
+        out.reconnectMaxMs = out.reconnectInitialMs;
+    }
     return out;
 }
 
@@ -262,10 +378,25 @@ class SttConfig extends EventEmitter {
             wsInitJson: (fromFile.wsInitJson ?? fromProc.wsInitJson ?? prev.wsInitJson) as string | null,
             wsPingSec: (fromFile.wsPingSec ?? fromProc.wsPingSec ?? prev.wsPingSec) as number | null,
             wsByeJson: (fromFile.wsByeJson ?? fromProc.wsByeJson ?? prev.wsByeJson) as string | null,
+            wsMode: (fromFile.wsMode ?? fromProc.wsMode ?? prev.wsMode) as WsMode,
+            wsSubprotocol: (fromFile.wsSubprotocol ?? fromProc.wsSubprotocol ?? prev.wsSubprotocol) as string | null,
+            wsJsonAudioKey: (fromFile.wsJsonAudioKey ?? fromProc.wsJsonAudioKey ?? prev.wsJsonAudioKey) as string | null,
             tcpFraming: (fromFile.tcpFraming ?? fromProc.tcpFraming ?? prev.tcpFraming) as TcpFraming,
             tcpInitHex: (fromFile.tcpInitHex ?? fromProc.tcpInitHex ?? prev.tcpInitHex) as string | null,
             tcpByeHex: (fromFile.tcpByeHex ?? fromProc.tcpByeHex ?? prev.tcpByeHex) as string | null,
+            tcpTlsEnabled: (fromFile.tcpTlsEnabled ?? fromProc.tcpTlsEnabled ?? prev.tcpTlsEnabled) as boolean,
+            tcpTlsRejectUnauthorized: (fromFile.tcpTlsRejectUnauthorized ?? fromProc.tcpTlsRejectUnauthorized ?? prev.tcpTlsRejectUnauthorized) as boolean,
+            tcpTlsServername: (fromFile.tcpTlsServername ?? fromProc.tcpTlsServername ?? prev.tcpTlsServername) as string | null,
+            tcpTlsCaFile: (fromFile.tcpTlsCaFile ?? fromProc.tcpTlsCaFile ?? prev.tcpTlsCaFile) as string | null,
+            tcpTlsCertFile: (fromFile.tcpTlsCertFile ?? fromProc.tcpTlsCertFile ?? prev.tcpTlsCertFile) as string | null,
+            tcpTlsKeyFile: (fromFile.tcpTlsKeyFile ?? fromProc.tcpTlsKeyFile ?? prev.tcpTlsKeyFile) as string | null,
             resampleEnabled: (fromFile.resampleEnabled ?? fromProc.resampleEnabled ?? prev.resampleEnabled) as boolean,
+            reconnectEnabled: (fromFile.reconnectEnabled ?? fromProc.reconnectEnabled ?? prev.reconnectEnabled) as boolean,
+            reconnectInitialMs: (fromFile.reconnectInitialMs ?? fromProc.reconnectInitialMs ?? prev.reconnectInitialMs) as number | null,
+            reconnectMaxMs: (fromFile.reconnectMaxMs ?? fromProc.reconnectMaxMs ?? prev.reconnectMaxMs) as number | null,
+            reconnectFactor: (fromFile.reconnectFactor ?? fromProc.reconnectFactor ?? prev.reconnectFactor) as number | null,
+            vendorPlugin: (fromFile.vendorPlugin ?? fromProc.vendorPlugin ?? prev.vendorPlugin) as string | null,
+            vendorParams: (fromFile.vendorParams ?? fromProc.vendorParams ?? prev.vendorParams) as string | null,
         };
         const next = validateAndNormalize(merged);
         if (
@@ -280,10 +411,25 @@ class SttConfig extends EventEmitter {
             next.wsInitJson !== prev.wsInitJson ||
             next.wsPingSec !== prev.wsPingSec ||
             next.wsByeJson !== prev.wsByeJson ||
+            next.wsMode !== prev.wsMode ||
+            next.wsSubprotocol !== prev.wsSubprotocol ||
+            next.wsJsonAudioKey !== prev.wsJsonAudioKey ||
             next.tcpFraming !== prev.tcpFraming ||
             next.tcpInitHex !== prev.tcpInitHex ||
             next.tcpByeHex !== prev.tcpByeHex ||
-            next.resampleEnabled !== prev.resampleEnabled
+            next.tcpTlsEnabled !== prev.tcpTlsEnabled ||
+            next.tcpTlsRejectUnauthorized !== prev.tcpTlsRejectUnauthorized ||
+            next.tcpTlsServername !== prev.tcpTlsServername ||
+            next.tcpTlsCaFile !== prev.tcpTlsCaFile ||
+            next.tcpTlsCertFile !== prev.tcpTlsCertFile ||
+            next.tcpTlsKeyFile !== prev.tcpTlsKeyFile ||
+            next.resampleEnabled !== prev.resampleEnabled ||
+            next.reconnectEnabled !== prev.reconnectEnabled ||
+            next.reconnectInitialMs !== prev.reconnectInitialMs ||
+            next.reconnectMaxMs !== prev.reconnectMaxMs ||
+            next.reconnectFactor !== prev.reconnectFactor ||
+            next.vendorPlugin !== prev.vendorPlugin ||
+            next.vendorParams !== prev.vendorParams
         ) {
             this.state = next;
             this.emit('update', next, prev);
@@ -328,6 +474,15 @@ class SttConfig extends EventEmitter {
     get wsByeJson(): string | null | undefined {
         return this.state.wsByeJson;
     }
+    get wsMode(): WsMode {
+        return (this.state.wsMode === 'json-base64') ? 'json-base64' : 'binary';
+    }
+    get wsSubprotocol(): string | null | undefined {
+        return this.state.wsSubprotocol ?? null;
+    }
+    get wsJsonAudioKey(): string {
+        return (this.state.wsJsonAudioKey ?? 'audio');
+    }
     get tcpFraming(): TcpFraming | undefined {
         return (this.state.tcpFraming === 'raw' || this.state.tcpFraming === 'len32' || this.state.tcpFraming === 'newline') ? this.state.tcpFraming : 'raw';
     }
@@ -337,8 +492,44 @@ class SttConfig extends EventEmitter {
     get tcpByeHex(): string | null | undefined {
         return this.state.tcpByeHex;
     }
+    get tcpTlsEnabled(): boolean | undefined {
+        return this.state.tcpTlsEnabled;
+    }
+    get tcpTlsRejectUnauthorized(): boolean | undefined {
+        return this.state.tcpTlsRejectUnauthorized;
+    }
+    get tcpTlsServername(): string | null | undefined {
+        return this.state.tcpTlsServername;
+    }
+    get tcpTlsCaFile(): string | null | undefined {
+        return this.state.tcpTlsCaFile;
+    }
+    get tcpTlsCertFile(): string | null | undefined {
+        return this.state.tcpTlsCertFile;
+    }
+    get tcpTlsKeyFile(): string | null | undefined {
+        return this.state.tcpTlsKeyFile;
+    }
     get resampleEnabled(): boolean | undefined {
         return this.state.resampleEnabled;
+    }
+    get reconnectEnabled(): boolean | undefined {
+        return this.state.reconnectEnabled;
+    }
+    get reconnectInitialMs(): number | null | undefined {
+        return this.state.reconnectInitialMs;
+    }
+    get reconnectMaxMs(): number | null | undefined {
+        return this.state.reconnectMaxMs;
+    }
+    get reconnectFactor(): number | null | undefined {
+        return this.state.reconnectFactor;
+    }
+    get vendorPlugin(): string | null | undefined {
+        return this.state.vendorPlugin;
+    }
+    get vendorParams(): string | null | undefined {
+        return this.state.vendorParams;
     }
 
     // 테스트 및 런타임 오버라이드 지원: 부분 설정을 적용하고 update 이벤트를 발생시킵니다.
@@ -359,3 +550,4 @@ class SttConfig extends EventEmitter {
 
 const sttConfig = new SttConfig();
 export default sttConfig;
+// SttConfigState is already exported as a type declaration above; no re-export needed.

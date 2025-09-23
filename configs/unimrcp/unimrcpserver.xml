@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<unimrcpserver>
+  <!-- UniMRCP Server Template: enable MRCPv2 over RTSP and RTP -->
+  <rtsp-listener>
+    <socket>0.0.0.0:8060</socket>
+    <resource-location>/unimrcp</resource-location>
+  </rtsp-listener>
+  <rtp-settings>
+    <ip>0.0.0.0</ip>
+    <rtp-port-min>40000</rtp-port-min>
+    <rtp-port-max>40100</rtp-port-max>
+  </rtp-settings>
+  <plugins>
+    <plugin>demo-recog</plugin>
+    <plugin>demo-synth</plugin>
+  </plugins>
+</unimrcpserver>
