@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<client-profile version="1.0">
+  <!-- MRCPv2 over SIP profile for sidecar real-time streaming -->
+  <sip-server ip="127.0.0.1" port="5060" />
+  <rtp>
+    <local-ip>0.0.0.0</local-ip>
+    <rtp-port-min>40000</rtp-port-min>
+    <rtp-port-max>40100</rtp-port-max>
+    <ptime>20</ptime>
+  </rtp>
+  <recognizer>
+    <codec>PCMU</codec>
+    <sample-rate>8000</sample-rate>
+    <channel-count>1</channel-count>
+    <timeout>0</timeout>
+    <no-input-timeout>0</no-input-timeout>
+    <speech-complete-timeout>1000</speech-complete-timeout>
+  </recognizer>
+</client-profile>

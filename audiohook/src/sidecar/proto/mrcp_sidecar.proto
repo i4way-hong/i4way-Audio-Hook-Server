@@ -1,0 +1,49 @@
+syntax = "proto3";
+package mrcp;
+
+// Health check
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+message HealthCheckRequest {}
+message HealthCheckResponse { string status = 1; }
+
+// MRCP sidecar bidirectional streaming
+service MrcpSidecar {
+  // Client streams Init (once) then Audio frames; Server streams events/results
+  rpc StartSession(stream SidecarMessage) returns (stream SidecarMessage);
+}
+
+message SidecarMessage {
+  oneof payload {
+    Init init = 1;
+    Audio audio = 2;
+    Event event = 3;
+  }
+}
+
+message Init {
+  string endpoint = 1;        // e.g., rtsp://host:port/unimrcp or SIP hint
+  string profile_id = 2;      // ah-mrcpv1 | ah-mrcpv2 | custom
+  string resource = 3;        // speechrecog | speechsynth
+  string codec = 4;           // PCMU | L16
+  int32 sample_rate = 5;      // 8000 | 16000 | ...
+  bool mono = 6;              // true -> 1ch
+  string language = 7;        // optional
+  map<string, string> vendor_headers = 8; // optional
+}
+
+message Audio {
+  bytes data = 1;             // raw frame (PCMU or PCM16LE)
+  uint32 rtp_timestamp = 2;   // optional
+}
+
+message Event {
+  string type = 1;            // rtsp-connected | rtp-started | result | closed | error
+  string remote = 2;          // for rtsp-connected
+  uint32 local_rtp_port = 3;  // for rtp-started
+  uint32 payload_type = 4;    // for rtp-started
+  string text = 5;            // for result
+  string reason = 6;          // for closed
+  string message = 7;         // for error
+}

@@ -10,6 +10,7 @@ import { createAudioFrame } from '../audio';
 import { TextDecoder } from 'util';
 import { readFileSync } from 'fs';
 import { getVendorPlugin, SttVendorPlugin } from './stt-vendor-plugin';
+import { createMrcpBridge, MrcpSttForwarder } from './stt-forwarder-mrcp';
 
 export interface SttForwarder {
     start(): Promise<void>;
@@ -162,12 +163,18 @@ class WebSocketForwarder implements SttForwarder {
             throw new Error('STT endpoint is not configured');
         }
         await new Promise<void>((resolve, reject) => {
-            const ws = new WebSocket(url, sttConfig.wsSubprotocol ?? undefined, {
-                headers: {
-                    ...(sttConfig.apiKey ? { Authorization: `Bearer ${sttConfig.apiKey}` } : {}),
-                    ...(sttConfig.headers ?? {}),
-                }
-            });
+            // ws 라이브러리는 subprotocol 자리에 undefined가 들어오면 SyntaxError 가능하므로 인자 수를 조정
+            const headers = {
+                ...(sttConfig.apiKey ? { Authorization: `Bearer ${sttConfig.apiKey}` } : {}),
+                ...(sttConfig.headers ?? {}),
+            } as Record<string, string>;
+            const subp = sttConfig.wsSubprotocol;
+            let ws: WebSocket;
+            if (subp && subp.trim().length > 0) {
+                ws = new WebSocket(url, subp, { headers });
+            } else {
+                ws = new WebSocket(url, { headers });
+            }
             ws.on('open', () => {
                 this.logger.info(`STT WS connected: ${url}`);
                 this.ws = ws;
@@ -577,33 +584,6 @@ class GrpcForwarder implements SttForwarder {
     }
 }
 
-// MRCP 포워더 스텁: 인터페이스만 구현, 후속 단계에서 세션/RTSP/RTP 연결 예정
-class MrcpForwarder implements SttForwarder {
-    private readonly logger: Logger;
-    private started = false;
-    constructor(logger: Logger) {
-        this.logger = logger;
-    }
-    async start(): Promise<void> {
-        if (this.started) {
-            return;
-        }
-        this.logger.info('STT MRCP forwarder (stub) started');
-        this.started = true;
-    }
-    async stop(): Promise<void> {
-        if (!this.started) {
-            return;
-        }
-        this.logger.info('STT MRCP forwarder (stub) stopped');
-        this.started = false;
-    }
-    send(_frame: MediaDataFrame): void {
-        // no-op for now; parameter kept for interface compatibility
-        void _frame;
-    }
-}
-
 export function createSttForwarder(protocol: SttProtocol, logger: Logger): SttForwarder {
     switch (protocol) {
         case 'websocket':
@@ -612,8 +592,21 @@ export function createSttForwarder(protocol: SttProtocol, logger: Logger): SttFo
             return new TcpForwarder(logger);
         case 'grpc':
             return new GrpcForwarder(logger);
-        case 'mrcp':
-            return new MrcpForwarder(logger);
+        case 'mrcp': {
+            const bridge = createMrcpBridge(logger);
+            const fwd = new MrcpSttForwarder(logger, bridge);
+            return {
+                async start() {
+                    await fwd.start();
+                },
+                async stop() {
+                    await fwd.stop();
+                },
+                send(frame: MediaDataFrame) {
+                    fwd.send(frame);
+                }
+            } as SttForwarder;
+        }
         default:
             return new NoopForwarder();
     }

@@ -1,0 +1,69 @@
+name: native-build
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      UNIMRCP_SDK_DIR: ${{ vars.UNIMRCP_SDK_DIR }}
+      APR_DIR: ${{ vars.APR_DIR }}
+      SOFIA_DIR: ${{ vars.SOFIA_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        run: npm ci
+        working-directory: app
+      - name: Build native (stub)
+        run: npm run build:native
+        working-directory: app
+      - name: Build native (with UniMRCP SDK)
+        if: env.UNIMRCP_SDK_DIR != ''
+        run: |
+          echo Building with UniMRCP SDK at %UNIMRCP_SDK_DIR%
+          setx GYP_DEFINES use_unimrcp_sdk=1
+          npm run build:native
+        working-directory: app
+      - name: Upload artifact (unimrcp.node)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unimrcp.node-win64
+          path: app/audiohook/src/sidecar/signaling/native/build/Release/unimrcp.node
+
+  build-ubuntu:
+    runs-on: ubuntu-latest
+    env:
+      UNIMRCP_SDK_DIR: ${{ vars.UNIMRCP_SDK_DIR_LINUX }}
+      APR_DIR: ${{ vars.APR_DIR_LINUX }}
+      SOFIA_DIR: ${{ vars.SOFIA_DIR_LINUX }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 make
+      - name: Install deps
+        run: npm ci
+        working-directory: app
+      - name: Build native (stub)
+        run: npm run build:native
+        working-directory: app
+      - name: Build native (with UniMRCP SDK)
+        if: env.UNIMRCP_SDK_DIR != ''
+        run: |
+          export GYP_DEFINES=use_unimrcp_sdk=1
+          npm run build:native
+        working-directory: app
+      - name: Upload artifact (unimrcp.node)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unimrcp.node-linux64
+          path: app/audiohook/src/sidecar/signaling/native/build/Release/unimrcp.node

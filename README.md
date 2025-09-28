@@ -1,6 +1,44 @@
 # AudioHook Reference Implementation
 
-// ...existing content...
+# Audiohook Sidecar - UniMRCP Integration Guide
+
+## 네이티브 UniMRCP SDK 연동 빌드
+
+Windows PowerShell
+
+```
+$env:GYP_DEFINES='use_unimrcp_sdk=1'
+$env:UNIMRCP_SDK_DIR='C:\unimrcp\sdk'
+$env:APR_DIR='C:\unimrcp\deps\apr'
+$env:SOFIA_DIR='C:\unimrcp\deps\sofia'
+npm run build:native
+```
+
+Linux/macOS
+
+```
+export GYP_DEFINES='use_unimrcp_sdk=1'
+export UNIMRCP_SDK_DIR=/opt/unimrcp
+export APR_DIR=/opt/apr
+export SOFIA_DIR=/opt/sofia-sip
+npm run build:native
+```
+
+## 런타임 설정
+- MRCP_RTP_PORT_MIN/MRCP_RTP_PORT_MAX: 로컬 RTP 포트 범위
+- MRCP_SIDECAR_SIGNALING=module, MRCP_SIDECAR_SIGNALING_MODULE=./audiohook/src/sidecar/signaling/unimrcp-signaling
+ - MRCP_ENABLE_RTP_LISTEN=1 : 세션 당 임의 UDP 포트 바인드하여 수신 RTP 헤더 패킷 카운트 (관측/테스트 용)
+ - MRCP_ENABLE_SIP_V2=1 : SIP UDP 1단계 스켈레톤 활성화 (INVITE 재전송 + 200 OK SDP 파싱)
+
+## 프로파일 매핑
+- ah-mrcpv1: RTSP(MRCPv1)
+- ah-mrcpv2: SIP(MRCPv2)
+
+## RTP ptime 협상
+- SDP a=ptime을 파싱해 합의된 ptime을 사용합니다.
+
+## CI 빌드
+- .github/workflows/native.yml 참조(Windows/Ubuntu에서 SDK 유무에 따라 조건부 빌드)
 
 ## STT 포워더 설정 가이드
 
@@ -101,4 +139,135 @@ STT_WS_BYE_JSON={"type":"bye"}
   ### TCP 테스트: `stt_tcp_test/server.js`
   - Env: PORT(또는 STT_TEST_TCP_PORT), TCP_FRAMING(raw|len32|newline), INIT_HEX, BYE_HEX
   - 기능: 프레이밍별 수신/송신, 3초마다 한글 텍스트 송신
+
+## 추가 문서
+* `docs/telemetry.md` - MRCP 세션 Telemetry 필드 정의 및 사용 예시
+* `docs/env.md` - MRCP/STT 관련 환경 변수 목록 및 튜닝 가이드
+* `docs/status-2025-09-26.md` - 최근 EOD 진행 상황 요약
+
+## Metrics (Prometheus)
+Sidecar HTTP 서버(/metrics 경로)에서 세션별 telemetry 누산 결과를 노출합니다.
+
+예시 응답:
+```
+# HELP mrcp_sessions Current sessions registered
+# TYPE mrcp_sessions counter
+mrcp_sessions 1
+# HELP mrcp_sip_attempts_total Total SIP attempts
+# TYPE mrcp_sip_attempts_total counter
+mrcp_sip_attempts_total 2
+# HELP mrcp_rtp_packets_received_total Total RTP packets observed (receive or send proxy)
+# TYPE mrcp_rtp_packets_received_total counter
+mrcp_rtp_packets_received_total 15
+```
+
+활용 방법:
+1. `curl http://127.0.0.1:<sidecar-port>/metrics`
+2. Prometheus `scrape_config`에 대상 추가
+3. Grafana 대시보드에 카운터 그래프 구성 (rate() 함수 활용)
+
+## RTP Listen 옵션
+`MRCP_ENABLE_RTP_LISTEN=1` 설정 시 세션 생성 시 부가 UDP 소켓을 임의 포트에 바인드해 수신 RTP 헤더(V=2) 패킷을 감지하고 `rtpPacketsReceived` 카운터를 증가시킵니다.
+
+주의:
+- 실제 RTP 스트림을 미러링하거나 termination 하지 않음 (관측 목적)
+- 많은 트래픽 환경에서는 소켓 처리 비용 증가 가능
+
+## SIP UDP (Experimental)
+`MRCP_ENABLE_SIP_V2=1` 활성화 시 순서:
+1. UDP INVITE 전송 (지수 백오프 재전송, 기본 5회)
+2. 200 OK SDP 수신 시 ACK (best-effort) → 세션 transport=sip
+3. 실패 시 TCP INVITE 재시도 (기존 skeleton)
+4. 다시 실패 시 RTSP → 최종 실패 시 fallback 5004 (비활성화 가능)
+
+제한:
+- 인증, CANCEL, 재등록, Dialog state machine 없음
+- Provisional (100/180) 단순 무시 (200 OK 필요)
+- 추후 telemetry v2 에서 UDP/TCP 분리 카운터 예정
+
+환경 변수 조합 예시 (PowerShell):
+```powershell
+$env:MRCP_ENABLE_SIP_V2=1
+$env:MRCP_ENABLE_RTP_LISTEN=1
+```
+
+## 빠른 시나리오 예시
+1. UDP SIP 서버(or mock) 준비 (200 OK with SDP 반환)
+2. Sidecar 실행 후 `/metrics` 로 sipAttempts 증가 확인
+3. RTP 패킷 몇 개 전송 → `mrcp_rtp_packets_received_total` 증가 관측
+
+## Real UniMRCP Integration (RTSP v1)
+
+다음 절차로 실제 UniMRCP RTSP 서버와 세션 협상을 검증할 수 있습니다.
+
+### 1. UniMRCP 서버 준비
+로컬 또는 컨테이너로 UniMRCP 서버를 실행하고 다음을 확인:
+* RTSP 제어 포트: 8060/TCP (기본)
+* RTP 포트 범위: 예) 40000-40050/UDP (서버 설정과 sidecar 환경변수 일치 필요)
+* 서버 설정 예시는 `configs/unimrcp/` 참고
+
+### 2. Sidecar 환경 변수
+PowerShell 예시:
+```
+$env:STT_PROTOCOL = 'mrcp'
+$env:STT_ENDPOINT = 'rtsp://127.0.0.1:8060/unimrcp'
+$env:MRCP_FORCE_RTSP = '1'        # (SIP 스켈레톤 우회)
+$env:MRCP_RTP_PORT_MIN = '41000'
+$env:MRCP_RTP_PORT_MAX = '41020'
+# 선택: 재시도/타임아웃 튜닝
+# $env:MRCP_RTSP_DESCRIBE_RETRIES = '2'
+# $env:MRCP_RTSP_SETUP_RETRIES    = '1'
+```
+
+실행:
+```
+npm run sidecar
+```
+
+### 3. 세션 열기 (간단 스니펫)
+```ts
+import { openSession } from './audiohook/src/sidecar/signaling/unimrcp-signaling';
+
+(async () => {
+  const session = await openSession({ endpoint: process.env.STT_ENDPOINT! });
+  console.log('telemetry', session.getTelemetry());
+  console.log('remoteRtpPort', session.remotePort);
+})();
+```
+
+### 4. Telemetry 확인 포인트
+* describeAttempts / setupAttempts == 1 (정상 협상)
+* fallback5004Count == 0
+* transport == 'rtsp'
+* lastErrorCode 없음
+
+### 5. 문제 해결 (Troubleshooting)
+| 증상 | 원인 | 조치 |
+|------|------|------|
+| ECONNREFUSED 8060 | 서버 미기동/방화벽 | 서버 실행 및 포트 허용 |
+| DESCRIBE 실패 반복 | 서버 설정/리소스 경로 불일치 | endpoint path (`/unimrcp`) 확인 |
+| SETUP 500 | RTP 범위 충돌/플러그인 오류 | 서버 로그 확인, RTP 범위 조정 |
+| fallback5004Count=1 | 모든 협상 실패 | 네트워크/포트/환경변수 재검증 |
+
+### 6. RTP 송출(추가 구현 필요)
+현재 리포는 RTP 미디어 패킷 송신/RECOGNIZE 명령 전체 구현은 최소화되어 있으므로 실제 음성 인식까지 검증하려면:
+1. SDP에서 remote audio m= 줄의 포트 추출
+2. PCMU(또는 L16) 패킷 20ms 간격 송신 (dgram/UDP)
+3. MRCP RECOGNIZE 메시지 전송 로직 추가 (Channel-Identifier, Content-Type 세팅)
+4. 이벤트(RECOGNITION-COMPLETE) 파싱
+
+### 7. 향후 확장 (SIP v2)
+`sip-v2.ts` 는 간소화된 TCP INVITE 스켈레톤입니다. 실제 SIP/UDP 트랜잭션 지원이 필요하면:
+1. UDP 소켓 생성 + INVITE (Via/From/To/Call-ID/CSeq) 빌드
+2. 100 Trying, 180 Ringing, 200 OK 처리
+3. ACK 전송 후 SDP 기반 RTP 동일 처리
+4. 재전송/분기 타이머(T1/T2) 적용
+
+로드맵 초안은 별도 `docs/sip-roadmap.md` 로 이어질 수 있습니다.
+
+### 8. Fallback 비활성화(선택 개선)
+현재 5004 fallback 은 협상 완전 실패 시 telemetry 관찰용입니다. 운영 환경에서 원치 않으면 코드 내 fallback 조건에 환경 변수 가드를 추가할 수 있습니다 (예: `MRCP_DISABLE_FALLBACK5004`).
+
+---
+추가 확장이 필요하면 README 하단에 항목을 증설하거나 전용 문서를 생성하는 것을 권장합니다.
 

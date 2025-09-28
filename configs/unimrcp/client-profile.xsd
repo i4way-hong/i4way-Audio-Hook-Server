@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <!-- Root elements supported by different UniMRCP deployments -->
+  <xsd:element name="profile" type="ClientProfileType"/>
+  <xsd:element name="client-profiles" type="ClientProfilesType"/>
+
+  <xsd:complexType name="ClientProfilesType">
+    <xsd:sequence>
+      <xsd:element name="profile" type="ClientProfileType" minOccurs="1" maxOccurs="unbounded"/>
+    </xsd:sequence>
+  </xsd:complexType>
+
+  <xsd:complexType name="ClientProfileType">
+    <xsd:sequence>
+      <xsd:choice minOccurs="0" maxOccurs="1">
+        <xsd:element name="rtsp-server" type="RtspServerType"/>
+        <xsd:element name="sip-server" type="SipServerType"/>
+      </xsd:choice>
+      <xsd:element name="rtp" type="RtpType" minOccurs="0"/>
+      <xsd:element name="recognizer" type="RecognizerType" minOccurs="0"/>
+      <xsd:element name="synthesizer" type="SynthesizerType" minOccurs="0"/>
+    </xsd:sequence>
+    <xsd:attribute name="name" type="xsd:string" use="required"/>
+    <xsd:attribute name="version" type="xsd:string" use="optional"/>
+  </xsd:complexType>
+
+  <xsd:complexType name="RtspServerType">
+    <xsd:attribute name="ip" type="xsd:string" use="required"/>
+    <xsd:attribute name="port" type="xsd:integer" use="required"/>
+    <xsd:attribute name="resource-location" type="xsd:string" use="optional"/>
+  </xsd:complexType>
+
+  <xsd:complexType name="SipServerType">
+    <xsd:sequence>
+      <xsd:element name="ip" type="xsd:string" minOccurs="0"/>
+      <xsd:element name="port" type="xsd:integer" minOccurs="0"/>
+    </xsd:sequence>
+  </xsd:complexType>
+
+  <xsd:complexType name="RtpType">
+    <xsd:sequence>
+      <xsd:element name="local-ip" type="xsd:string" minOccurs="0"/>
+      <xsd:element name="rtp-port-min" type="xsd:integer" minOccurs="0"/>
+      <xsd:element name="rtp-port-max" type="xsd:integer" minOccurs="0"/>
+      <xsd:element name="ptime" type="xsd:integer" minOccurs="0"/>
+    </xsd:sequence>
+  </xsd:complexType>
+
+  <xsd:complexType name="RecognizerType">
+    <xsd:sequence>
+      <xsd:element name="codec" type="xsd:string" minOccurs="0"/>
+      <xsd:element name="sample-rate" type="xsd:integer" minOccurs="0"/>
+      <xsd:element name="channel-count" type="xsd:integer" minOccurs="0"/>
+      <xsd:element name="vendor-specific" type="xsd:anyType" minOccurs="0"/>
+      <xsd:element name="timeout" type="xsd:integer" minOccurs="0"/>
+      <xsd:element name="no-input-timeout" type="xsd:integer" minOccurs="0"/>
+      <xsd:element name="speech-complete-timeout" type="xsd:integer" minOccurs="0"/>
+    </xsd:sequence>
+  </xsd:complexType>
+
+  <xsd:complexType name="SynthesizerType">
+    <xsd:sequence/>
+  </xsd:complexType>
+</xsd:schema>

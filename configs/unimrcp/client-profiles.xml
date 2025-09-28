@@ -1,22 +1,6 @@
 <?xml version="1.0"?>
 <client-profiles>
-  <!-- UniMRCP Client Profile Template (ASR over MRCPv2) -->
-  <profile name="asr-default" version="1.0">
-    <rtsp-server ip="127.0.0.1" port="8060" resource-location="/unimrcp" />
-    <rtp>
-      <local-ip>0.0.0.0</local-ip>
-      <rtp-port-min>40000</rtp-port-min>
-      <rtp-port-max>40100</rtp-port-max>
-      <ptime>20</ptime>
-    </rtp>
-    <recognizer>
-      <codec>PCMU</codec> <!-- or L16 -->
-      <sample-rate>8000</sample-rate>
-      <channel-count>1</channel-count>
-      <vendor-specific/>
-      <timeout>5000</timeout>
-      <no-input-timeout>5000</no-input-timeout>
-      <speech-complete-timeout>1000</speech-complete-timeout>
-    </recognizer>
-  </profile>
+  <profile id="asr-default" file="asr-default.xml"/>
+  <profile id="ah-mrcpv1" file="ah-mrcpv1.xml"/>
+  <profile id="ah-mrcpv2" file="ah-mrcpv2.xml"/>
 </client-profiles>

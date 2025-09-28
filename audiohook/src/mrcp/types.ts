@@ -5,56 +5,58 @@ export type MrcpResource = 'speechrecog' | 'speechsynth';
 export type MrcpCodec = 'PCMU' | 'L16';
 
 export interface MrcpSessionOptions {
-  resource: MrcpResource;
-  codec: MrcpCodec;
-  sampleRate: 8000 | 16000 | 44100 | 48000;
-  mono: boolean;
-  language?: string;
-  vendorHeaders?: Record<string, string>;
+    resource: MrcpResource;
+    codec: MrcpCodec;
+    sampleRate: 8000 | 16000 | 44100 | 48000;
+    mono: boolean;
+    language?: string;
+    vendorHeaders?: Record<string, string>;
 }
 
 export interface RtspConnectedEvent {
-  type: 'rtsp-connected';
-  remote: string;
+    type: 'rtsp-connected';
+    remote: string;
 }
 export interface RtpStartedEvent {
-  type: 'rtp-started';
-  localRtpPort: number;
-  payloadType: number;
+    type: 'rtp-started';
+    localRtpPort: number;
+    payloadType: number;
 }
 export interface AsrResultEvent {
-  type: 'result';
-  // 구현체별: N-Best JSON, 단문 텍스트 등
-  nbest?: unknown;
-  text?: string;
-  confidences?: number[];
+    type: 'result';
+    // 구현체별: N-Best JSON, 단문 텍스트 등
+    nbest?: unknown;
+    text?: string;
+    confidences?: number[];
 }
 export interface BridgeClosedEvent {
-  type: 'closed';
-  reason?: string;
+    type: 'closed';
+    reason?: string;
 }
 export interface BridgeErrorEvent {
-  type: 'error';
-  message: string;
-  cause?: unknown;
+    type: 'error';
+    message: string;
+    cause?: unknown;
 }
 
 export type BridgeEvent =
-  | RtspConnectedEvent
-  | RtpStartedEvent
-  | AsrResultEvent
-  | BridgeClosedEvent
-  | BridgeErrorEvent;
+    | RtspConnectedEvent
+    | RtpStartedEvent
+    | AsrResultEvent
+    | BridgeClosedEvent
+    | BridgeErrorEvent;
 
 export interface MrcpSession {
-  options: MrcpSessionOptions;
-  on(event: BridgeEvent['type'], listener: (ev: BridgeEvent) => void): void;
-  once(event: BridgeEvent['type'], listener: (ev: BridgeEvent) => void): void;
-  off(event: BridgeEvent['type'], listener: (ev: BridgeEvent) => void): void;
-  sendAudio(payload: Buffer, opts?: { rtpTimestamp?: number }): void;
-  close(reason?: string): Promise<void>;
+    options: MrcpSessionOptions;
+    on(event: BridgeEvent['type'], listener: (ev: BridgeEvent) => void): void;
+    once(event: BridgeEvent['type'], listener: (ev: BridgeEvent) => void): void;
+    off(event: BridgeEvent['type'], listener: (ev: BridgeEvent) => void): void;
+    sendAudio(payload: Buffer, opts?: { rtpTimestamp?: number }): void;
+    close(reason?: string): Promise<void>;
 }
 
 export interface MrcpBridge {
-  connect(endpoint: string, opts: MrcpSessionOptions): Promise<MrcpSession>;
+    connect(endpoint: string, opts: MrcpSessionOptions): Promise<MrcpSession>;
 }
+
+// NOTE: 위 인터페이스는 bridge-umc 에서 그대로 사용된다. 필요 시 이벤트 필드 확장 가능.

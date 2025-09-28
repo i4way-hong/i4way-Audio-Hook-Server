@@ -24,4 +24,13 @@
     <plugin>demo-recog</plugin>
     <plugin>demo-synth</plugin>
   </plugins>
+
+  <!--
+    검증 체크리스트
+    - SIP 포트/트랜스포트: 5060/udp(환경에 맞게 변경)
+    - RTP 포트 범위: 40000-40100 (방화벽 허용)
+    - 리소스: recog/synth 플러그인 로드 확인
+    - 코덱: PCMU(PT=0) 또는 L16(동적 PT) 매칭 — 앱의 STT_ENCODING, STT_RATE와 일치 필요
+    - 에코/Mock: demo-recog 사용 시 간단 결과가 반환됨
+  -->
 </unimrcpserver>

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- UniMRCP client document -->
+<unimrcpclient version="1.0" subfolder="client-profiles">
+  <properties>
+    <!-- 자동으로 바인딩 IP 식별 -->
+    <ip type="auto"/>
+    <!-- 필요 시 명시:
+    <ip>10.10.0.1</ip>
+    <ext-ip>a.b.c.d</ext-ip>
+    <server-ip>a.b.c.d</server-ip>
+    -->
+  </properties>
+
+  <components>
+    <!-- MRCP 리소스 팩토리 -->
+    <resource-factory>
+      <resource id="speechsynth" enable="true"/>
+      <resource id="speechrecog" enable="true"/>
+      <resource id="recorder" enable="true"/>
+      <resource id="speakverify" enable="true"/> 
+    </resource-factory>
+
+    <!-- SofiaSIP MRCPv2 시그널링 (필요 시 사용) -->
+    <sip-uac id="SIP-Agent-1" type="SofiaSIP">
+      <!-- <sip-ip>10.10.0.1</sip-ip> -->
+      <!-- <sip-ext-ip>a.b.c.d</sip-ext-ip> -->
+      <sip-port>8063</sip-port>
+      <sip-transport>udp</sip-transport>
+      <ua-name>UniMRCP SofiaSIP</ua-name>
+      <sdp-origin>UniMRCPClient</sdp-origin>
+    </sip-uac>
+
+    <!-- UniRTSP MRCPv1 시그널링 (RTSP 사용 시) -->
+    <rtsp-uac id="RTSP-Agent-1" type="UniRTSP">
+      <max-connection-count>100</max-connection-count>
+      <!-- <request-timeout>5000</request-timeout> -->
+      <sdp-origin>UniMRCPClient</sdp-origin>
+    </rtsp-uac>
+
+    <!-- MRCPv2 커넥션 에이전트 -->
+    <mrcpv2-uac id="MRCPv2-Agent-1">
+      <max-connection-count>100</max-connection-count>
+      <offer-new-connection>false</offer-new-connection>
+      <rx-buffer-size>1024</rx-buffer-size>
+      <tx-buffer-size>1024</tx-buffer-size>
+      <!-- <request-timeout>5000</request-timeout> -->
+    </mrcpv2-uac>
+
+    <!-- 미디어 엔진 -->
+    <media-engine id="Media-Engine-1">
+      <realtime-rate>1</realtime-rate>
+    </media-engine>
+
+    <!-- RTP 터미네이션 팩토리 -->
+    <rtp-factory id="RTP-Factory-1">
+      <!-- 필요 시 명시:
+      <rtp-ip>10.10.0.1</rtp-ip>
+      <rtp-ext-ip>a.b.c.d</rtp-ext-ip>
+      -->
+      <rtp-port-min>40000</rtp-port-min>
+      <rtp-port-max>40100</rtp-port-max>
+    </rtp-factory>
+  </components>
+  
+  <settings>
+    <!-- 공통 RTP/RTCP 설정 -->
+    <rtp-settings id="RTP-Settings-1">
+      <jitter-buffer>
+        <adaptive>1</adaptive>
+        <playout-delay>50</playout-delay>
+        <max-playout-delay>600</max-playout-delay>
+        <time-skew-detection>1</time-skew-detection>
+      </jitter-buffer>
+      <ptime>20</ptime>
+      <codecs>PCMU L16/96/8000 telephone-event/101/8000</codecs>
+      <!-- 예시:
+      <codecs>PCMU PCMA L16/96/8000 PCMU/97/16000 PCMA/98/16000 L16/99/16000</codecs>
+      -->
+      <rtcp enable="false">
+        <rtcp-bye>1</rtcp-bye>
+        <tx-interval>5000</tx-interval>
+        <rx-resolution>1000</rx-resolution>
+      </rtcp>
+    </rtp-settings>
+  </settings>
+  
+  <!-- 클라이언트 프로필 -->
+  <profiles>
+    <profile id="asr-default"/>
+  </profiles>
+</unimrcpclient>

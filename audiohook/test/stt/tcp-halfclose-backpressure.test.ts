@@ -18,6 +18,13 @@ function createTestLogger(): Logger {
 }
 
 describe('STT TCP Forwarder half-close/backpressure', () => {
+    const toClose: Array<() => Promise<void>> = [];
+    afterEach(async () => {
+        while (toClose.length) {
+            const fn = toClose.pop();
+            try { if (fn) await fn(); } catch {/* ignore */}
+        }
+    });
     test('peer half-close (FIN) then further sends are ignored', async () => {
         let total = 0;
         const server = await new Promise<{ port: number; close: () => Promise<void> }>((resolve) => {
@@ -37,6 +44,7 @@ describe('STT TCP Forwarder half-close/backpressure', () => {
                 }
             });
         });
+        toClose.push(server.close);
 
         type SttCfgOverride = { applyOverrides: (p: Partial<import('../../src/utils/stt-config').SttConfigState>) => () => void };
         const restore = (sttConfig as unknown as SttCfgOverride).applyOverrides({
@@ -90,6 +98,7 @@ describe('STT TCP Forwarder half-close/backpressure', () => {
                 }
             });
         });
+        toClose.push(server.close);
 
         type SttCfgOverride = { applyOverrides: (p: Partial<import('../../src/utils/stt-config').SttConfigState>) => () => void };
         const restore = (sttConfig as unknown as SttCfgOverride).applyOverrides({

@@ -1,4 +1,21 @@
 import { resampleL16 } from '../../src/audio/resample';
+// Node < 18 혹은 JSDOM 환경 보정: globalThis.performance 없으면 perf_hooks 사용
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
+if (typeof performance === 'undefined') {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { performance: perf } = require('perf_hooks');
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    global.performance = perf;
+}
+
+// 타입 선언 (jest tsdom 환경에서 global.performance polyfill 시 만족)
+declare global {
+    // eslint-disable-next-line @typescript-eslint/no-namespace
+    // @ts-ignore
+    var performance: { now(): number };
+}
 
 describe('resampleL16 micro-benchmark', () => {
     function stats(values: number[]) {

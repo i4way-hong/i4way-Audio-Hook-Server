@@ -22,7 +22,7 @@
     "noEmitOnError": true,
     "experimentalDecorators": true,
     "strictPropertyInitialization": false,
-    "typeRoots": ["./node_modules/@types"],    
+    "typeRoots": ["./node_modules/@types"],
     "outDir": "./dist"
   },
   "include": [
@@ -30,6 +30,8 @@
     "audiohook/**/*"
   ],
   "exclude": [
-    "src/simulated-transcripts.ts"
+    "src/simulated-transcripts.ts",
+    "audiohook/test/**",
+    "**/*.test.ts"
   ]
 }
