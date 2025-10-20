@@ -20,6 +20,7 @@
     "sidecar:build": "tsc --project tsconfig.json --pretty && node dist/audiohook/src/sidecar/server.js",
     "sidecar:mock": "ts-node scripts/mrcp-sidecar-mock.ts",
   "build:native": "node-gyp configure build --directory ./audiohook/src/sidecar/signaling/native",
+  "start:grpc-test": "(cd stt_grpc_test && npm install --no-audit --no-fund && npm start)",
   "send:rtp": "ts-node scripts/send_rtp_pcmu_example.ts"
   },
   "keywords": [],

@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package audiohook.stt.v1;
+
+option go_package = "audiohook/stt/v1";
+option java_multiple_files = true;
+option java_package = "com.audiohook.stt.v1";
+option csharp_namespace = "Audiohook.Stt.V1";
+
+// Bidirectional streaming speech recognition service draft.
+// This initial version focuses on transporting raw/encoded audio and
+// delivering partial/final transcripts.
+// Fields kept minimal; can be evolved with proto3 optional or new fields.
+service SpeechTranscription {
+  // Client opens a bidi stream:
+  // 1) Sends a SessionInit
+  // 2) Streams AudioChunk frames
+  // 3) Optionally sends ControlCommand messages
+  // Server responds with SessionReady, TranscriptEvent(s), ControlAck, ErrorEvent.
+  rpc StreamingRecognize(stream StreamingRequest) returns (stream StreamingResponse);
+
+  // Lightweight health status (for readiness probes & orchestration).
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // Optional: preload contextual phrases.
+  rpc UploadContext(UploadContextRequest) returns (UploadContextResponse);
+}
+
+message StreamingRequest {
+  oneof payload {
+    SessionInit init = 1;          // Must be first message.
+    AudioChunk audio = 2;          // Raw audio stream pieces.
+    ControlCommand control = 3;    // Runtime control / param updates.
+  }
+  TraceContext trace = 10;         // Observability hook.
+  string client_session_id = 11;   // Provided by client for correlation.
+  map<string,string> tags = 12;    // Free-form key-value (tenant, region, etc.).
+}
+
+message SessionInit {
+  string language_code = 1;          // e.g. "ko-KR", "en-US".
+  uint32 sample_rate_hz = 2;         // 8000/16000/48000
+  AudioEncoding encoding = 3;        // LINEAR16 or PCMU
+  bool enable_interim_results = 4;   // Request partial transcripts.
+  bool single_utterance = 5;         // Auto end after first final result.
+  bool enable_word_time_offsets = 6; // Word-level timing.
+  map<string,string> vendor_params = 10; // Vendor specific knobs.
+}
+
+enum AudioEncoding {
+  AUDIO_ENCODING_UNSPECIFIED = 0;
+  LINEAR16 = 1;
+  PCMU = 2;
+}
+
+message AudioChunk {
+  bytes data = 1;         // Raw encoded bytes.
+  uint64 sequence = 2;    // Monotonic seq; gaps can be logged.
+  bool end_of_stream = 3; // True when client finishes sending audio.
+}
+
+message ControlCommand {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    PAUSE = 1;
+    RESUME = 2;
+    FLUSH_PARTIAL = 3; // Force emission of current partial hypothesis.
+    FINALIZE = 4;      // Client indicates no more audio; force final.
+    SET_PARAM = 5;     // Update vendor_params.
+  }
+  Type type = 1;
+  map<string,string> params = 2; // When SET_PARAM used.
+}
+
+message StreamingResponse {
+  oneof payload {
+    SessionReady ready = 1;
+    TranscriptEvent transcript = 2;
+    ControlAck control_ack = 3;
+    ErrorEvent error = 4;
+  }
+  TraceContext trace = 10;
+}
+
+message SessionReady {
+  string server_session_id = 1;
+  string model_id = 2;
+}
+
+message TranscriptEvent {
+  string text = 1;
+  bool is_final = 2;
+  float confidence = 3;
+  repeated WordInfo words = 4;
+  uint64 result_index = 5; // Increment for each final.
+}
+
+message WordInfo {
+  string word = 1;
+  double start_time_sec = 2;
+  double end_time_sec = 3;
+  float confidence = 4;
+}
+
+message ControlAck {
+  ControlCommand.Type type = 1;
+  bool accepted = 2;
+  string message = 3;
+}
+
+message ErrorEvent {
+  string code = 1;    // Canonical/normalized code.
+  string message = 2; // Human-readable.
+  string details = 3; // Extra JSON detail.
+  bool fatal = 4;     // If true, stream will close.
+}
+
+message HealthCheckRequest {}
+message HealthCheckResponse {
+  enum Status { UNKNOWN = 0; SERVING = 1; NOT_SERVING = 2; DEGRADED = 3; }
+  Status status = 1;
+  string version = 2;
+  string build_commit = 3;
+}
+
+message UploadContextRequest {
+  string context_id = 1;
+  repeated string phrases = 2;
+}
+
+message UploadContextResponse {
+  string context_id = 1;
+  uint32 accepted_count = 2;
+}
+
+message TraceContext {
+  string trace_id = 1;
+  string span_id = 2;
+  bool sampled = 3;
+  map<string,string> baggage = 4;
+}

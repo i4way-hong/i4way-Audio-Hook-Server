@@ -25,6 +25,8 @@ export interface SttVendorPlugin {
     // Optional: TCP handshake payloads
     tcpInit?(): Buffer | undefined;
     tcpBye?(): Buffer | undefined;
+    // Optional: handle finalized transcript (for normalization / side-effects)
+    handleTranscript?(text: string, ctx: { final: boolean; raw?: unknown }): void;
 }
 
 let cached: SttVendorPlugin | null | undefined;

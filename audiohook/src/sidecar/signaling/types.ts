@@ -20,6 +20,12 @@ export interface SignalingSession {
   transport?: 'sip' | 'rtsp';
   getTelemetry?: () => MrcpTelemetrySnapshot;
   getBufferedErrors?: () => MrcpErrorEvent[];
+  // Phase1 stub: MRCP channel placeholder
+  channel?: {
+    send(text: string): void;
+    close(): void;
+    isClosed(): boolean;
+  };
 }
 
 // Event model
@@ -55,6 +61,11 @@ export interface MrcpTelemetrySnapshot {
   inviteRetries?: number; inviteTimeouts?: number; rtpPacketsReceived?: number;
   rtspDescribeAttempts: number; rtspDescribeFail: number; rtspSetupAttempts: number; rtspSetupFail: number;
   fallback5004Count: number; sessionsSip: number; sessionsRtsp: number; lastErrorCode?: string;
+  // v2 lifecycle additions (optional at call sites)
+  endedAt?: number; sessionDurationMs?: number; sessionsClosed?: number;
+  // planned Phase1/2 additions (may be undefined in early phases)
+  sipProvisional?: number; sipInviteRetransmits?: number; sipInviteRttMsSum?: number; sipInviteRttMsCount?: number;
+  sipCodecOffered?: number; sipCodecSelected?: string; sessionsMrcpChannel?: number;
   // future extension fields may appear (use optional chaining when accessing externally)
 }
 

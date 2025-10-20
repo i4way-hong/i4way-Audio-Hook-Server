@@ -1,0 +1,15 @@
+{
+  "name": "stt-grpc-test-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Simple gRPC STT test server for AudioHook integration testing",
+  "main": "server.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.0",
+    "@grpc/proto-loader": "^0.8.0"
+  }
+}

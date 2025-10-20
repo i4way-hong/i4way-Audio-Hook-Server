@@ -15,6 +15,7 @@ function createTestLogger(): Logger {
 
 describe('STT gRPC/MRCP forwarder stubs', () => {
   test('gRPC stub starts/stops without error', async () => {
+    process.env['STT_GRPC_DRY_RUN'] = '1';
     const logger = createTestLogger();
     const fwd = createSttForwarder('grpc', logger);
     await expect(fwd.start()).resolves.toBeUndefined();

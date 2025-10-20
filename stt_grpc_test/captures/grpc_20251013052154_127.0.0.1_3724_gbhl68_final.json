@@ -1,0 +1,23 @@
+{
+  "type": "stream_final",
+  "serverSessionId": "tgrpc-1760332914985-2dhfe7",
+  "metrics": {
+    "firstPartialLatencyMs": 5,
+    "totalSessionDurationMs": 62351
+  },
+  "audio": {
+    "channels": 2,
+    "declaredSampleRateHz": 8000,
+    "effectiveSampleRateHz": 8000
+  },
+  "stats": {
+    "totalAudioBytes": 960000,
+    "firstAudioAt": "2025-10-13T05:21:55.001Z",
+    "lastAudioAt": "2025-10-13T05:22:57.340Z",
+    "derivedSampleRateHz": 7700
+  },
+  "timestamps": {
+    "initAt": "2025-10-13T05:21:54.996Z",
+    "endAt": "2025-10-13T05:22:57.347Z"
+  }
+}

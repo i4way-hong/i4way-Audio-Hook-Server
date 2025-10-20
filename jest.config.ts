@@ -3,7 +3,8 @@ import type { Config } from '@jest/types';
 // Sync object
 const config: Config.InitialOptions = {
     roots: [
-        './audiohook'
+        './audiohook',
+        './test'
     ],
     verbose: true,
     preset: 'ts-jest',

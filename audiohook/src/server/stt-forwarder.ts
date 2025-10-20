@@ -11,6 +11,9 @@ import { TextDecoder } from 'util';
 import { readFileSync } from 'fs';
 import { getVendorPlugin, SttVendorPlugin } from './stt-vendor-plugin';
 import { createMrcpBridge, MrcpSttForwarder } from './stt-forwarder-mrcp';
+import * as grpc from '@grpc/grpc-js';
+import * as protoLoader from '@grpc/proto-loader';
+import path from 'path';
 
 export interface SttForwarder {
     start(): Promise<void>;
@@ -186,7 +189,11 @@ class WebSocketForwarder implements SttForwarder {
             ws.on('message', (data, isBinary) => {
                 try {
                     if (isBinary && sttConfig.wsMode === 'binary') {
-                        const len = Buffer.isBuffer(data) ? data.length : Array.isArray(data) ? Buffer.concat(data as Buffer[]).length : (data as ArrayBuffer).byteLength;
+                        const len = Buffer.isBuffer(data)
+                            ? data.length
+                            : Array.isArray(data)
+                                ? (Buffer.concat(data as unknown as Uint8Array[]).length)
+                                : (data as ArrayBuffer).byteLength;
                         this.logger.debug(`STT WS recv binary (${len} bytes)`);
                     } else {
                         const decoder = new TextDecoder('utf-8');
@@ -194,9 +201,10 @@ class WebSocketForwarder implements SttForwarder {
                         if (typeof data === 'string') {
                             text = data;
                         } else if (Buffer.isBuffer(data)) {
-                            text = decoder.decode(data);
+                            text = decoder.decode(new Uint8Array(data));
                         } else if (Array.isArray(data)) {
-                            text = decoder.decode(Buffer.concat(data as Buffer[]));
+                            const merged = Buffer.concat(data as unknown as Uint8Array[]);
+                            text = decoder.decode(new Uint8Array(merged));
                         } else {
                             text = decoder.decode(new Uint8Array(data as ArrayBuffer));
                         }
@@ -308,7 +316,7 @@ class TcpForwarder implements SttForwarder {
     private logTcpTextPreview(buf: Buffer) {
         try {
             const decoder = new TextDecoder('utf-8');
-            const text = decoder.decode(buf);
+            const text = decoder.decode(new Uint8Array(buf));
             const preview = text.length > 200 ? `${text.slice(0, 200)}…` : text;
             const asciiOnly = process.env['STT_WS_LOG_ASCII'] === '1';
             const safe = asciiOnly ? preview.replace(/[^\x20-\x7E]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`) : preview;
@@ -347,10 +355,10 @@ class TcpForwarder implements SttForwarder {
             case 'len32': {
                 const h = Buffer.allocUnsafe(4);
                 h.writeUInt32BE(buf.length, 0);
-                return Buffer.concat([h, buf]);
+                return Buffer.concat([h, buf] as unknown as Uint8Array[]);
             }
             case 'newline': {
-                return Buffer.concat([buf, Buffer.from('\n')]);
+                return Buffer.concat([buf, Buffer.from('\n')] as unknown as Uint8Array[]);
             }
             case 'raw':
             default:
@@ -405,7 +413,7 @@ class TcpForwarder implements SttForwarder {
                     if (!chunk) {
                         break;
                     }
-                    const ok = this.socket.write(chunk);
+                    const ok = this.socket.write(chunk as unknown as Uint8Array);
                     if (!ok) {
                         // still backpressured; wait for next drain
                         this.waitingDrain = true;
@@ -431,7 +439,7 @@ class TcpForwarder implements SttForwarder {
                     // 누적 버퍼에 추가 후 프레이밍에 맞춰 파싱
                     const mode: TcpFraming | undefined = sttConfig.tcpFraming;
                     if (mode === 'len32') {
-                        this.inboundBuffer = Buffer.concat([this.inboundBuffer, buf]);
+                        this.inboundBuffer = Buffer.concat([this.inboundBuffer, buf] as unknown as Uint8Array[]);
                         while (this.inboundBuffer.length >= 4) {
                             const len = this.inboundBuffer.readUInt32BE(0);
                             if (this.inboundBuffer.length < 4 + len) {
@@ -442,7 +450,7 @@ class TcpForwarder implements SttForwarder {
                             this.logTcpTextPreview(frame);
                         }
                     } else if (mode === 'newline') {
-                        this.inboundBuffer = Buffer.concat([this.inboundBuffer, buf]);
+                        this.inboundBuffer = Buffer.concat([this.inboundBuffer, buf] as unknown as Uint8Array[]);
                         let idx: number;
                         while ((idx = this.inboundBuffer.indexOf(0x0A)) !== -1) { // \n
                             let line = this.inboundBuffer.subarray(0, idx);
@@ -461,7 +469,7 @@ class TcpForwarder implements SttForwarder {
                 // INIT
                 if (sttConfig.tcpInitHex) {
                     try {
-                        sock.write(hexToBuffer(sttConfig.tcpInitHex));
+                        sock.write(hexToBuffer(sttConfig.tcpInitHex) as unknown as Uint8Array);
                     } catch {
                         // ignore
                     }
@@ -469,7 +477,7 @@ class TcpForwarder implements SttForwarder {
                     const init = this.vendor.tcpInit();
                     if (init) {
                         try {
-                            sock.write(init);
+                            sock.write(init as unknown as Uint8Array);
                         } catch {
                             // ignore
                         }
@@ -500,7 +508,7 @@ class TcpForwarder implements SttForwarder {
             // BYE
             if (sttConfig.tcpByeHex) {
                 try {
-                    s.write(hexToBuffer(sttConfig.tcpByeHex));
+                    s.write(hexToBuffer(sttConfig.tcpByeHex) as unknown as Uint8Array);
                 } catch {
                     // ignore
                 }
@@ -508,7 +516,7 @@ class TcpForwarder implements SttForwarder {
                 const bye = this.vendor.tcpBye();
                 if (bye) {
                     try {
-                        s.write(bye);
+                        s.write(bye as unknown as Uint8Array);
                     } catch {
                         // ignore
                     }
@@ -548,7 +556,7 @@ class TcpForwarder implements SttForwarder {
                 this.writeQueue.push(framed);
                 return;
             }
-            const ok = s.write(framed);
+            const ok = s.write(framed as unknown as Uint8Array);
             if (!ok) {
                 this.logger.debug('STT TCP backpressure: socket buffer is full');
                 this.waitingDrain = true;
@@ -557,30 +565,265 @@ class TcpForwarder implements SttForwarder {
     }
 }
 
-// gRPC 포워더 스텁: 인터페이스만 구현, 후속 단계에서 실제 스트리밍 추가 예정
+// gRPC 포워더 구현: proto/speech_transcription.proto 의 StreamingRecognize 호출
 class GrpcForwarder implements SttForwarder {
     private readonly logger: Logger;
     private started = false;
+    private client: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    private stream: grpc.ClientDuplexStream<any, any> | null = null; // eslint-disable-line @typescript-eslint/no-explicit-any
+    private sequence = 0;
+    private initSent = false;
+    private reconnecting = false;
+    private reconnectAttempt = 0;
+    private partialBuffer: string = '';
+
     constructor(logger: Logger) {
         this.logger = logger;
     }
+
+    private buildClient() {
+        if (this.client) return;
+        const endpoint = sttConfig.endpoint; // host:port 혹은 dns:port 예상
+        if (!endpoint) throw new Error('STT gRPC endpoint not configured (STT_ENDPOINT)');
+        // proto 로딩 (캐싱 단순화)
+        const def = protoLoader.loadSync(path.resolve(process.cwd(), 'proto', 'speech_transcription.proto'), {
+            longs: String,
+            enums: String,
+            defaults: true,
+            oneofs: true,
+        });
+        const pkg = grpc.loadPackageDefinition(def) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+        const Svc = pkg.audiohook.stt.v1.SpeechTranscription;
+        // TLS 여부 결정: STT_GRPC_TLS_ENABLED=true 이고 @grpc/grpc-js createSsl 활용
+        const tlsEnabled = process.env['STT_GRPC_TLS_ENABLED'] ? /^(1|true|yes)$/i.test(process.env['STT_GRPC_TLS_ENABLED']) : false;
+        let creds: grpc.ChannelCredentials;
+        if (tlsEnabled) {
+            try {
+                const caFile = process.env['STT_GRPC_TLS_CA_FILE'];
+                const certFile = process.env['STT_GRPC_TLS_CERT_FILE'];
+                const keyFile = process.env['STT_GRPC_TLS_KEY_FILE'];
+                const rootCert = caFile ? readFileSync(caFile) : undefined;
+                const certChain = certFile ? readFileSync(certFile) : undefined;
+                const privateKey = keyFile ? readFileSync(keyFile) : undefined;
+                creds = grpc.credentials.createSsl(rootCert ?? null, privateKey, certChain);
+            } catch (e) {
+                this.logger.error(`STT gRPC TLS credential load failed -> falling back insecure: ${(e as Error).message}`);
+                creds = grpc.credentials.createInsecure();
+            }
+        } else {
+            creds = grpc.credentials.createInsecure();
+        }
+        const overrideAuthority = process.env['STT_GRPC_TLS_OVERRIDE_AUTHORITY'];
+        const channelArgs: Record<string, unknown> = {};
+        if (overrideAuthority) {
+            channelArgs['grpc.ssl_target_name_override'] = overrideAuthority;
+            channelArgs['grpc.default_authority'] = overrideAuthority;
+        }
+        // keepalive(옵션) 환경 변수: STT_GRPC_KEEPALIVE_MS
+        const kaMsRaw = process.env['STT_GRPC_KEEPALIVE_MS'];
+        if (kaMsRaw) {
+            const v = parseInt(kaMsRaw, 10);
+            if (!isNaN(v) && v > 0) {
+                channelArgs['grpc.keepalive_time_ms'] = v;
+            }
+        }
+        this.client = new Svc(endpoint, creds, channelArgs);
+    }
+
+    private openStream() {
+        if (this.stream) return;
+        this.buildClient();
+        // Metadata (auth / trace)
+        const md = new grpc.Metadata();
+    // Embedded server token (GRPC_AUTH_TOKEN) deprecated; only honor STT_GRPC_AUTH_TOKEN
+    const authToken = process.env['STT_GRPC_AUTH_TOKEN'];
+        if (authToken) {
+            md.set('authorization', `Bearer ${authToken}`);
+        }
+        // traceparent (간단: 외부에서 환경 변수 설정 시)
+        const traceParent = process.env['TRACEPARENT'];
+        if (traceParent) {
+            md.set('traceparent', traceParent);
+        }
+        this.stream = this.client.StreamingRecognize(md);
+    const localStream = this.stream; // capture for type narrowing
+    if (!localStream) return;
+        localStream.on('data', (msg: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+            try {
+                if (msg.error) {
+                    this.logger.warn(`STT gRPC error event code=${msg.error.code} message=${msg.error.message}`);
+                } else if (msg.transcript) {
+                    const t = msg.transcript;
+                    if (t.is_final) {
+                        // 최종 문장: 누적 + 새 텍스트 로그 후 버퍼 초기화
+                        const combined = (this.partialBuffer ? this.partialBuffer + ' ' : '') + t.text;
+                        this.logger.info(`STT gRPC transcript final: ${combined}`);
+                        try { getVendorPlugin(sttConfig.vendorPlugin ?? null, (m)=>this.logger.debug(m))?.handleTranscript?.(combined, { final: true, raw: t }); } catch { /* ignore */ }
+                        this.partialBuffer = '';
+                    } else {
+                        // partial 교체 (streaming engines 는 누적/비누적 두 형태 가능; 여기서는 overwrite)
+                        this.partialBuffer = t.text;
+                        this.logger.debug(`STT gRPC transcript partial: ${t.text}`);
+                        try { getVendorPlugin(sttConfig.vendorPlugin ?? null, (m)=>this.logger.debug(m))?.handleTranscript?.(t.text, { final: false, raw: t }); } catch { /* ignore */ }
+                    }
+                } else if (msg.ready) {
+                    // proto-loader (keepCase=false) converts server_session_id -> serverSessionId
+                    const sid = msg.ready.serverSessionId ?? msg.ready.server_session_id;
+                    if (sid === undefined) {
+                        this.logger.warn('STT gRPC ready event received without serverSessionId field');
+                    } else {
+                        this.logger.info(`STT gRPC session ready id=${sid}`);
+                    }
+                }
+            } catch {
+                // ignore
+            }
+        });
+        localStream.on('error', (err: Error) => {
+            this.logger.error(`STT gRPC stream error: ${err.message}`);
+            this.cleanupStream();
+            this.scheduleReconnect();
+        });
+        localStream.on('end', () => {
+            this.logger.warn('STT gRPC stream ended');
+            this.cleanupStream();
+            this.scheduleReconnect();
+        });
+        // 초기 메시지 전송 (SessionInit)
+        // PCMU 샘플레이트 통일 로직:
+        //  - 기본적으로 μ-law 는 8000Hz 가 표준. 일부 상위 설정에서 잘못된 레이트가 들어오면 재생 속도 문제가 발생할 수 있음.
+        //  - STT_GRPC_FORCE_PCMU_8K (기본 true) 이면 PCMU 선택 시 sample_rate_hz=8000 으로 강제.
+        //  - STT_GRPC_PCMU_SAMPLE_RATE 로 8000 외 값을 실험적으로 지정 가능 (force 플래그 true일 때도 우선).
+        const forcePcmu = process.env['STT_GRPC_FORCE_PCMU_8K'] ? /^(1|true|yes)$/i.test(process.env['STT_GRPC_FORCE_PCMU_8K']) : true;
+        const pcmuRateOverrideRaw = process.env['STT_GRPC_PCMU_SAMPLE_RATE'] ? parseInt(process.env['STT_GRPC_PCMU_SAMPLE_RATE'], 10) : 8000;
+        // 허용 샘플레이트 세트 (proto 코멘트 + 일반적 44.1k)
+        const ALLOWED_RATES = [8000, 16000, 44100, 48000] as const;
+        function nearestAllowed(v: number): typeof ALLOWED_RATES[number] {
+            if ((ALLOWED_RATES as readonly number[]).includes(v)) return v as typeof ALLOWED_RATES[number];
+            let bestNum: number = ALLOWED_RATES[0];
+            let bestDiff = Math.abs(v - bestNum);
+            for (const r of ALLOWED_RATES) {
+                const d = Math.abs(v - r);
+                if (d < bestDiff) { bestNum = r; bestDiff = d; }
+            }
+            return bestNum as typeof ALLOWED_RATES[number];
+        }
+        let chosenRate: typeof ALLOWED_RATES[number] = nearestAllowed(sttConfig.rate);
+        const chosenEncoding = sttConfig.encoding === 'L16' ? 'LINEAR16' : 'PCMU';
+        if (chosenEncoding === 'PCMU' && forcePcmu) {
+            const forced = nearestAllowed(pcmuRateOverrideRaw > 0 ? pcmuRateOverrideRaw : 8000);
+            if (forced !== 8000) {
+                this.logger.warn(`PCMU sample rate override in effect: ${forced} (standard=8000)`);
+            } else if (chosenRate !== 8000) {
+                this.logger.warn(`PCMU sample rate forced to 8000 (was ${chosenRate})`);
+            }
+            chosenRate = forced;
+        }
+        const initMsg = {
+            init: {
+                language_code: 'ko-KR',
+                sample_rate_hz: chosenRate,
+                encoding: chosenEncoding,
+                enable_interim_results: true,
+                single_utterance: false,
+                enable_word_time_offsets: false,
+                vendor_params: {},
+                trace_context: process.env['TRACEPARENT'] ? { traceparent: process.env['TRACEPARENT'] } : undefined,
+            },
+            client_session_id: `cli-${Date.now()}`,
+        };
+        try {
+            if (localStream) localStream.write(initMsg);
+            this.initSent = true;
+        } catch (e) {
+            this.logger.error(`Failed to send gRPC init: ${(e as Error).message}`);
+        }
+    }
+
+    private cleanupStream() {
+        if (this.stream) {
+            try { this.stream.removeAllListeners(); } catch { /* ignore */ }
+            this.stream = null;
+            this.initSent = false;
+        }
+    }
+
+    private scheduleReconnect() {
+        const enabled = process.env['STT_GRPC_RECONNECT_ENABLED'] ? /^(1|true|yes)$/i.test(process.env['STT_GRPC_RECONNECT_ENABLED']) : sttConfig.reconnectEnabled;
+        if (!enabled || this.reconnecting) return;
+        this.reconnecting = true;
+        const base = process.env['STT_GRPC_RECONNECT_INITIAL_MS'] ? parseInt(process.env['STT_GRPC_RECONNECT_INITIAL_MS'], 10) : (sttConfig.reconnectInitialMs ?? 1000);
+        const max = process.env['STT_GRPC_RECONNECT_MAX_MS'] ? parseInt(process.env['STT_GRPC_RECONNECT_MAX_MS'], 10) : (sttConfig.reconnectMaxMs ?? 15000);
+        const factorRaw = process.env['STT_GRPC_RECONNECT_FACTOR'] ? parseFloat(process.env['STT_GRPC_RECONNECT_FACTOR']) : (sttConfig.reconnectFactor ?? 2.0);
+        const jitterRaw = process.env['STT_GRPC_RECONNECT_JITTER'] ? parseFloat(process.env['STT_GRPC_RECONNECT_JITTER']) : 0.3; // 30% default
+        const attempt = this.reconnectAttempt++;
+        const exp = Math.pow(factorRaw, attempt);
+        let delay = Math.min(max, Math.round(base * exp));
+        const jitterPortion = Math.max(0, Math.min(0.99, jitterRaw));
+        const jitter = Math.round(delay * jitterPortion * Math.random());
+        delay = delay - Math.round(delay * jitterPortion / 2) + jitter; // center 분포
+        if (delay < 10) delay = 10;
+        this.logger.warn(`STT gRPC reconnect attempt=${attempt} in ${delay} ms (base=${base} max=${max} factor=${factorRaw} jitter=${jitterPortion})`);
+        setTimeout(() => {
+            this.reconnecting = false;
+            if (!this.started) return;
+            try {
+                this.openStream();
+                // 성공 시 attempt 리셋
+                this.reconnectAttempt = 0;
+            } catch (e) {
+                this.logger.error(`gRPC reconnect failed: ${(e as Error).message}`);
+                this.scheduleReconnect();
+            }
+        }, delay);
+    }
+
     async start(): Promise<void> {
-        if (this.started) {
-            return;
-        }
-        this.logger.info('STT gRPC forwarder (stub) started');
+        if (this.started) return;
         this.started = true;
-    }
-    async stop(): Promise<void> {
-        if (!this.started) {
-            return;
+        this.logger.info('STT gRPC forwarder starting');
+            // Dry-run 모드: 테스트에서 실제 네트워크 연결을 피하고 최소한의 초기화만 수행
+            if (process.env['STT_GRPC_DRY_RUN'] && /^(1|true|yes)$/i.test(process.env['STT_GRPC_DRY_RUN'])) {
+                this.logger.info('STT gRPC forwarder dry-run enabled (no connection attempt)');
+                this.started = true;
+                this.initSent = true; // init 전송 생략하되 이후 send() 호출이 그냥 무시되도록
+                return;
+            }
+        try {
+            this.openStream();
+        } catch (e) {
+            this.logger.error(`Failed to start gRPC stream: ${(e as Error).message}`);
+            this.scheduleReconnect();
         }
-        this.logger.info('STT gRPC forwarder (stub) stopped');
-        this.started = false;
     }
-    send(_frame: MediaDataFrame): void {
-        // no-op for now; parameter kept for interface compatibility
-        void _frame;
+
+    async stop(): Promise<void> {
+        if (!this.started) return;
+        this.started = false;
+        this.logger.info('STT gRPC forwarder stopping');
+        if (this.stream) {
+            try { this.stream.end(); } catch { /* ignore */ }
+        }
+        this.cleanupStream();
+    }
+
+    send(frame: MediaDataFrame): void {
+        if (!this.started || !this.stream) return;
+        const payload = buildPayload(frame, this.logger, { rate: false });
+        if (!payload) return;
+        // AudioChunk 메시지 전송
+        const msg = {
+            audio: {
+                data: payload,
+                sequence: this.sequence++,
+                end_of_stream: false,
+            }
+        };
+        try {
+            this.stream.write(msg);
+        } catch (e) {
+            this.logger.error(`Failed to write audio chunk to gRPC: ${(e as Error).message}`);
+        }
     }
 }
 

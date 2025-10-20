@@ -1061,6 +1061,7 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
             return;
         }
         this.sttForwarderPromise = (async () => {
+                this.logger.debug(`Creating STT forwarder with protocol: ${sttConfig.protocol}`);
             const fwd = createSttForwarder(sttConfig.protocol, this.logger);
             await fwd.start();
             this.sttForwarder = fwd;

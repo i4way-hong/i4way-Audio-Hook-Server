@@ -32,15 +32,30 @@ const path = require('path');
 
 const net = require('net');
 
-const PORT = parseInt(process.env.PORT || process.env.STT_TEST_TCP_PORT || '7070', 10);
+// Unified env variables across test harnesses
+const PORT = parseInt(process.env.PORT || process.env.STT_TEST_TCP_PORT || process.env.STT_TEST_PORT || '7070', 10);
 const FRAMING = (process.env.TCP_FRAMING || 'raw').toLowerCase();
-// Binary audio interpretation
 const AUDIO_ENCODING = (process.env.AUDIO_ENCODING || 'PCMU').toUpperCase(); // 'PCMU' | 'L16'
 const CHANNELS = Math.max(1, parseInt(process.env.CHANNELS || '1', 10));
 const BYTES_PER_SAMPLE = AUDIO_ENCODING === 'L16' ? 2 : 1;
 const LOG_SAMPLES = Math.max(0, parseInt(process.env.LOG_SAMPLES || '8', 10));
+const LOG_JSON = /^(1|true|yes)$/i.test(process.env.LOG_JSON || '0');
+const CAPTURE_DIR = process.env.CAPTURE_DIR || 'captures';
+const PCMU_MONO_EXPORT = /^(1|true|yes)$/i.test(process.env.PCMU_MONO_EXPORT || '1'); // 다채널 PCMU 시 _combined_mono.pcmu 추가 생성
+const MESSAGE_INTERVAL_MS = parseInt(process.env.MESSAGE_INTERVAL_MS || '3000', 10);
+const ECHO_TEXT = process.env.ECHO_TEXT; // fixed outgoing text if set
 
-console.log(`[config] PORT=${PORT} FRAMING=${FRAMING} CHANNELS=${CHANNELS} AUDIO_ENCODING=${AUDIO_ENCODING} LOG_SAMPLES=${LOG_SAMPLES}`);
+function log(level, msg, extra) {
+  if (LOG_JSON) {
+    const line = { ts: new Date().toISOString(), level, msg, ...(extra || {}) };
+    console.log(JSON.stringify(line));
+  } else {
+    const kv = Object.entries(extra || {}).map(([k,v])=>`${k}=${v}`).join(' ');
+    console.log(`[${level}] ${msg}${kv ? ' ' + kv : ''}`);
+  }
+}
+
+log('info', 'config', { port: PORT, framing: FRAMING, channels: CHANNELS, audioEncoding: AUDIO_ENCODING, logSamples: LOG_SAMPLES, captureDir: CAPTURE_DIR });
 
 function frame(buf) {
   switch (FRAMING) {
@@ -58,7 +73,7 @@ function frame(buf) {
 }
 
 function makeCaptureDir() {
-  const dir = path.resolve(__dirname, 'captures');
+  const dir = path.resolve(__dirname, CAPTURE_DIR);
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
   return dir;
 }
@@ -73,15 +88,17 @@ function makeCaptureWriters(socket, baseExt) {
   const combinedPath = path.join(dir, `${base}_combined.${ext}`);
   const rxPath = path.join(dir, `${base}_rx.${ext}`);
   const txPath = path.join(dir, `${base}_tx.${ext}`);
+  const monoPath = (ext === 'pcmu' && PCMU_MONO_EXPORT && CHANNELS > 1) ? path.join(dir, `${base}_combined_mono.pcmu`) : null;
   const combined = fs.createWriteStream(combinedPath);
   const rx = fs.createWriteStream(rxPath);
   const tx = fs.createWriteStream(txPath);
-  return { dir, combinedPath, rxPath, txPath, combined, rx, tx };
+  const mono = monoPath ? fs.createWriteStream(monoPath) : null;
+  return { dir, combinedPath, rxPath, txPath, monoPath, combined, rx, tx, mono };
 }
 
 const server = net.createServer((socket) => {
   const ip = `${socket.remoteAddress}:${socket.remotePort}`;
-  console.log(`[conn] ${ip}`);
+  log('info', 'conn', { ip });
 
   let bytes = 0;
   let frames = 0;
@@ -109,6 +126,10 @@ const server = net.createServer((socket) => {
       const off0 = base + (0 * BYTES_PER_SAMPLE);
       const ch0 = buf.subarray(off0, off0 + BYTES_PER_SAMPLE);
       try { caps.rx.write(ch0); } catch {}
+      // PCMU mono export (채널0만 연속 저장)
+      if (caps.mono && BYTES_PER_SAMPLE === 1) {
+        try { caps.mono.write(ch0); } catch {}
+      }
       // CH1 -> TX (존재 시)
       if (CHANNELS >= 2) {
         const off1 = base + (1 * BYTES_PER_SAMPLE);
@@ -130,9 +151,9 @@ const server = net.createServer((socket) => {
     try {
       const payload = frame(Buffer.from(msg, 'utf8'));
       socket.write(payload);
-      console.log(`[send-text] ${msg}`);
+      log('info', 'send_text', { bytes: payload.length, preview: msg.slice(0,80) });
     } catch {}
-  }, 3000);
+  }, Math.max(500, MESSAGE_INTERVAL_MS));
   if (typeof speakTimer.unref === 'function') speakTimer.unref();
 
   socket.on('data', (buf) => {
@@ -159,19 +180,19 @@ const server = net.createServer((socket) => {
   });
 
   socket.on('close', () => {
-    console.log(`[close] ${ip}`);
+    log('info', 'close', { ip });
     clearInterval(speakTimer);
     try { caps.combined.end(); } catch {}
     try { caps.rx.end(); } catch {}
     try { caps.tx.end(); } catch {}
-    console.log(`[capture] saved: combined=${caps.combinedPath} rx=${caps.rxPath} tx=${caps.txPath}`);
+  log('info', 'capture_saved', { combined: caps.combinedPath, rx: caps.rxPath, tx: caps.txPath, mono: caps.monoPath || undefined });
     if (process.env.BYE_HEX) {
       try { socket.write(Buffer.from(process.env.BYE_HEX.replace(/[^0-9a-fA-F]/g, ''), 'hex')); } catch {}
     }
   });
 
   socket.on('error', (err) => {
-    console.error(`[error] ${ip} ${err?.message || err}`);
+    log('error', 'socket_error', { ip, err: err?.message || String(err) });
   });
 
   const statTimer = setInterval(() => {
@@ -183,7 +204,7 @@ const server = net.createServer((socket) => {
       return `${label}[${rendered}]`;
     });
     const chStats = rxChBytes.map((b, idx) => `${chLabels[idx] || `CH${idx}`}:${b}`).join(' ');
-    console.log(`[stats] frames=${frames} bytes=${bytes} samples=${rxSamples} ${chStats} previews=${prevParts.join(' | ')}`);
+  log('debug', 'stats', { frames, bytes, samples: rxSamples, channels: chStats, previews: prevParts.join(' | ') });
     bytes = 0; frames = 0; rxSamples = 0; previews = resetPreviews();
     for (let i = 0; i < CHANNELS; i++) { rxChBytes[i] = 0; }
   }, 1000);
@@ -191,5 +212,5 @@ const server = net.createServer((socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`STT TCP test server listening on tcp://0.0.0.0:${PORT} framing=${FRAMING}`);
+  log('info', 'listening', { proto: 'tcp', url: `tcp://0.0.0.0:${PORT}`, framing: FRAMING });
 });

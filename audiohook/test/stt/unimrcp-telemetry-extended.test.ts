@@ -23,7 +23,8 @@ describe('Telemetry extended', () => {
     process.env['MRCP_DISABLE_NATIVE'] = '1';
     delete process.env['MRCP_FORCE_RTSP'];
     process.env['MRCP_SIP_INVITE_RETRIES'] = '2';
-    process.env['MRCP_SIP_INVITE_TIMEOUT_MS'] = '160';
+  process.env['MRCP_SIP_INVITE_TIMEOUT_MS'] = '160';
+  process.env['MRCP_TEST_ALLOW_LOW_TIMEOUT'] = '1';
     process.env['MRCP_RESULT_PARTIAL_INTERVAL_MS'] = '60';
     process.env['MRCP_RESULT_FINAL_AFTER_MS'] = '300';
   process.env['MRCP_TEST_FORCE_SIP_TIMEOUT'] = '1'; // synthetic first failure
@@ -82,7 +83,8 @@ describe('Telemetry extended', () => {
     process.env['MRCP_DISABLE_NATIVE'] = '1';
     delete process.env['MRCP_FORCE_RTSP'];
     process.env['MRCP_SIP_INVITE_RETRIES'] = '2';
-    process.env['MRCP_SIP_INVITE_TIMEOUT_MS'] = '150';
+  process.env['MRCP_SIP_INVITE_TIMEOUT_MS'] = '150';
+  process.env['MRCP_TEST_ALLOW_LOW_TIMEOUT'] = '1';
     process.env['MRCP_RESULT_PARTIAL_INTERVAL_MS'] = '50';
     process.env['MRCP_RESULT_FINAL_AFTER_MS'] = '250';
     // Unused port with no server for SIP

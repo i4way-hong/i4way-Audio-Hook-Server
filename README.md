@@ -29,6 +29,30 @@ npm run build:native
 - MRCP_SIDECAR_SIGNALING=module, MRCP_SIDECAR_SIGNALING_MODULE=./audiohook/src/sidecar/signaling/unimrcp-signaling
  - MRCP_ENABLE_RTP_LISTEN=1 : 세션 당 임의 UDP 포트 바인드하여 수신 RTP 헤더 패킷 카운트 (관측/테스트 용)
  - MRCP_ENABLE_SIP_V2=1 : SIP UDP 1단계 스켈레톤 활성화 (INVITE 재전송 + 200 OK SDP 파싱)
+ - (테스트) MRCP_TEST_ALLOW_LOW_TIMEOUT=1 : SIP 타이머 하한(2*T1) 검증 우회 (Jest 가속 전용)
+
+### SIP / RTP / Telemetry 관련 핵심 환경변수 (요약)
+| 변수 | 설명 | 타입/범위 | 비고 |
+|------|------|-----------|------|
+| MRCP_SIP_T1_MS | SIP Timer T1 (기본 500) | 100~5000 (테스트 최소 제한: 테스트 플래그 없으면 200 이상) | 재전송 초기 간격 |
+| MRCP_SIP_T2_MS | SIP Timer T2 (기본 4000) | >= T1 | 재전송 간격 상한 |
+| MRCP_SIP_INVITE_MAX_RETRANS | 재전송 최대 횟수 | 1~10 | RFC 3261 권장 7 |
+| MRCP_SIP_CODEC_LIST | Offer 코덱 CSV | 예: PCMU,PCMA,L16 | 순서=우선도 |
+| MRCP_ENABLE_RTP_LISTEN | RTP 관측 | 0/1 | rtpPacketsReceived 노출 |
+| MRCP_ENABLE_SIP_V2 | SIP UDP 활성 | 0/1 | 비활성 시 RTSP 경로 우선 |
+| MRCP_TEST_ALLOW_LOW_TIMEOUT | 낮은 타이머 허용 | 0/1 (test) | 프로덕션 금지 |
+
+### 테스트 전용 네트워크 시뮬레이터 (재정리)
+| 변수 | 의미 | 기본 | 노트 |
+|------|------|------|------|
+| MRCP_SIP_TEST_PACKET_DROP_RATE | 1차 또는 persistent 모든 시도 드롭 확률 | 0 | 0.0~1.0 |
+| MRCP_SIP_TEST_PACKET_DELAY_MS | 고정 지연 ms | 0 | 지연 + jitter 합산 적용 |
+| MRCP_SIP_TEST_PACKET_JITTER_MS | +/- 지터 범위 | 0 | Uniform [-j,+j] |
+| MRCP_SIP_TEST_SEED | RNG 시드 | 시간 기반 | 동일 시 재현성 |
+| MRCP_SIP_TEST_PERSISTENT_DROP | 재전송에도 확률 적용 | 0 | 1 설정시 모든 attempt 대상 |
+| MRCP_SIP_TEST_LOG | 결정 로그 출력 | 0 | 단위/통합 테스트 디버그 |
+
+위 표는 `docs/telemetry.md` 와 동기화되어야 하며, 값/명칭 변경 시 CHANGELOG 업데이트를 수행합니다.
 
 ## 프로파일 매핑
 - ah-mrcpv1: RTSP(MRCPv1)
@@ -189,6 +213,12 @@ mrcp_rtp_packets_received_total 15
 ```powershell
 $env:MRCP_ENABLE_SIP_V2=1
 $env:MRCP_ENABLE_RTP_LISTEN=1
+ # 네트워크 시뮬레이터(테스트용)
+ $env:MRCP_SIP_TEST_PACKET_DROP_RATE=0.3
+ $env:MRCP_SIP_TEST_PACKET_DELAY_MS=120
+ $env:MRCP_SIP_TEST_PACKET_JITTER_MS=40
+ $env:MRCP_SIP_TEST_SEED=12345
+ $env:MRCP_SIP_TEST_LOG=1
 ```
 
 ## 빠른 시나리오 예시
@@ -264,6 +294,20 @@ import { openSession } from './audiohook/src/sidecar/signaling/unimrcp-signaling
 4. 재전송/분기 타이머(T1/T2) 적용
 
 로드맵 초안은 별도 `docs/sip-roadmap.md` 로 이어질 수 있습니다.
+
+### 9. 테스트 전용 네트워크 시뮬레이터 변수
+신뢰성 하네스(sip-udp-reliability-harness.test.ts) 및 수동 실험용. 프로덕션에서 사용하지 마세요.
+
+| 변수 | 의미 | 범위/예시 |
+|------|------|-----------|
+| MRCP_SIP_TEST_PACKET_DROP_RATE | 1차(또는 persistent 모드 모든 시도) 전송 드롭 확률 | 0.0~1.0 |
+| MRCP_SIP_TEST_PACKET_DELAY_MS | 고정 지연(ms) | 0~5000 (테스트) |
+| MRCP_SIP_TEST_PACKET_JITTER_MS | +/- 지터 폭(ms) | 0~2000 |
+| MRCP_SIP_TEST_SEED | 시드 RNG | 정수 |
+| MRCP_SIP_TEST_PERSISTENT_DROP | '1'이면 재전송 시도에도 확률적 드롭 계속 적용 | 0/1 |
+| MRCP_SIP_TEST_LOG | '1'이면 drop/delay 결정 로그 출력 | 0/1 |
+
+Telemetry 연계: 드롭/지연 시뮬레이션은 SIP 자체 코드 변경 없이 `sip-udp.ts` 송신 시 network-sim 을 경유하여 적용됨. 실패 케이스는 `inviteTimeouts` 카운터에 반영.
 
 ### 8. Fallback 비활성화(선택 개선)
 현재 5004 fallback 은 협상 완전 실패 시 telemetry 관찰용입니다. 운영 환경에서 원치 않으면 코드 내 fallback 조건에 환경 변수 가드를 추가할 수 있습니다 (예: `MRCP_DISABLE_FALLBACK5004`).

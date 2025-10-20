@@ -15,6 +15,7 @@ import { OpenSessionArgs, SignalingSession, isMrcpEvent, MrcpErrorCode } from '.
 import { performSipInvite, sendSipAck, sendSipBye } from './sip-v2';
 import { performSipInviteUdp } from './sip-udp';
 import { MrcpTelemetry } from './telemetry';
+import { MrcpChannelStub } from './mrcp-channel-stub';
 // SIP placeholder (performSipInvite) 는 아직 미구현 - 참조용
 // import { performSipInvite } from './sip-client';
 import { ResultSimulator } from './result-simulator';
@@ -527,8 +528,8 @@ async function performSipInviteWithRetry(endpoint: string, localIp: string, loca
     while (attempt < maxRetries) {
         attempt++;
         try {
-            telemetry.markSipAttempt();
-            const res = await performSipInvite(endpoint, localIp, localPort, payloadType, Number(process.env['MRCP_SIP_INVITE_TIMEOUT_MS'] || 4000));
+            telemetry.markSipAttempt('tcp');
+            const res = await performSipInvite(endpoint, localIp, localPort, payloadType, Number(process.env['MRCP_SIP_INVITE_TIMEOUT_MS'] || 4000), telemetry);
             if (attempt > 1) {
                 telemetry.addInviteRetries(attempt - 1); // count prior failed attempts as retries
             }
@@ -542,7 +543,7 @@ async function performSipInviteWithRetry(endpoint: string, localIp: string, loca
             if (attempt >= maxRetries) break;
         }
     }
-    // record retries count (attempts -1) if >1
+    // record retries count (attempts -1) if >1 (defensive – should already be counted inside loop)
     if (attempt > 1) {
         telemetry.addInviteRetries(attempt - 1);
     }
@@ -608,14 +609,14 @@ export async function openSession(args: OpenSessionArgs): Promise<SignalingSessi
         let sipRes: Awaited<ReturnType<typeof performSipInvite>> | undefined;
         const wantUdp = !!process.env['MRCP_ENABLE_SIP_V2'];
         if (wantUdp) {
-            telemetry.markSipAttempt();
+            telemetry.markSipAttempt('udp');
             try {
-                const udpRes = await performSipInviteUdp({ endpoint: args.endpoint, localIp, localRtpPort: localPort, payloadType });
+                const udpRes = await performSipInviteUdp({ endpoint: args.endpoint, localIp, localRtpPort: localPort, payloadType, telemetry });
                 // unify shape with TCP result (already similar)
                 sipRes = udpRes as any;
-                telemetry.markSipSuccess();
+                telemetry.markSipSuccess('udp');
             } catch (e) {
-                telemetry.markSipFail();
+                telemetry.markSipFail('udp');
                 emitter.emit('error', { type: 'error', code: MrcpErrorCode.SIP_INVITE_FAILED, message: 'SIP UDP INVITE failed – trying TCP', cause: (e as Error).message, profileId: args.profileId });
             }
         }
@@ -623,9 +624,9 @@ export async function openSession(args: OpenSessionArgs): Promise<SignalingSessi
             try {
                 const tcpRes = await performSipInviteWithRetry(args.endpoint, localIp, localPort, payloadType, telemetry);
                 sipRes = tcpRes as any;
-                telemetry.markSipSuccess();
+                telemetry.markSipSuccess('tcp');
             } catch (e) {
-                telemetry.markSipFail();
+                telemetry.markSipFail('tcp');
                 emitter.emit('error', { type: 'error', code: MrcpErrorCode.SIP_INVITE_FAILED, message: 'SIP INVITE failed – attempting RTSP fallback', cause: (e as Error).message, profileId: args.profileId });
             }
         }
@@ -641,13 +642,19 @@ export async function openSession(args: OpenSessionArgs): Promise<SignalingSessi
             if (sipRes.dialog) {
                 sendSipAck(localIp, sipRes.dialog);
             }
+            // MRCP channel skeleton (stub)
+            const channel = new MrcpChannelStub({ emit: (ev) => emitter.emit(ev.type, ev) });
+            telemetry.incrementMrcpChannelSessions();
             const close = () => {
+                // Mark session closed first (idempotent) so telemetry reflects closure even if BYE send throws
+                telemetry.markSessionClosed();
+                try { channel.close(); } catch { /* ignore */ }
                 try { if (sipRes!.dialog) sendSipBye(localIp, sipRes!.dialog); } catch { /* ignore */ }
-                sim.stop();
+                try { sim.stop(); } catch { /* ignore */ }
                 emitter.emit('closed', { type: 'closed', reason: 'skeleton-close' });
             };
             telemetry.markSessionTransport('sip');
-            return { remoteIp: new URL(args.endpoint).hostname, remotePort: sipRes.remotePort, payloadType: pt, emitter, close, ptimeMs: sipRes.ptimeMs, transport: 'sip', getTelemetry: () => telemetry.snapshot(), getBufferedErrors: () => [...errorBuffer] };
+            return { remoteIp: new URL(args.endpoint).hostname, remotePort: sipRes.remotePort, payloadType: pt, emitter, close, ptimeMs: sipRes.ptimeMs, transport: 'sip', channel, getTelemetry: () => telemetry.snapshot(), getBufferedErrors: () => [...errorBuffer] };
         }
         // else fall through to RTSP
     }
@@ -715,6 +722,7 @@ export async function openSession(args: OpenSessionArgs): Promise<SignalingSessi
             sim.stop();
             try { rtpListen?.close(); } catch { /* ignore */ }
             rtpListen = null;
+            telemetry.markSessionClosed();
             emitter.emit('closed', { type: 'closed', reason: 'skeleton-close' });
         };
         telemetry.markSessionTransport('rtsp');
@@ -733,6 +741,7 @@ export async function openSession(args: OpenSessionArgs): Promise<SignalingSessi
         }, 6000);
         const close = () => {
             clearTimeout(timer);
+            telemetry.markSessionClosed();
             emitter.emit('closed', { type: 'closed', reason: 'skeleton-close' });
         };
         telemetry.markSessionTransport('rtsp');

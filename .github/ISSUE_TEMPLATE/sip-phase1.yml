@@ -1,0 +1,60 @@
+name: SIP Phase 1 Epic
+description: Track all Phase 1 (protocol minimum viability) tasks for SIP(MRCPv2) enablement
+labels: ['sip','phase1','epic']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SIP Phase 1 Epic
+        목표: UDP/TCP 기본 INVITE 트랜잭션, 재전송 타이머, provisional 처리, 다중 코덱 Offer, MRCP Channel 스켈레톤, 텔레메트리 확장.
+  - type: checkboxes
+    id: tasks
+    attributes:
+      label: Phase 1 Task Checklist
+      options:
+        - label: P1-01 INVITE Client Transaction (CALLING/PROCEEDING/COMPLETED) Timer A/B 구현
+        - label: P1-02 INVITE 재전송(backoff) + sipInviteRetransmits 카운터
+        - label: P1-03 Provisional(100/180) 수신 처리 + sipProvisional 카운터
+        - label: P1-04 다중 코덱 Offer/codecSelected Telemetry
+        - label: P1-05 MRCP Channel 스켈레톤 (Channel-ID/Session-ID 저장, sessionsMrcpChannel 증가)
+        - label: P1-06 ACK/BYE 견고화(Idempotent close 테스트 통과)
+        - label: P1-07 Telemetry 확장 필드 및 /metrics 반영 (provisional, retransmits, codec, inviteRtt)
+        - label: P1-08 환경변수 검증(T1,T2,maxRetrans,코덱리스트) 실패 시 FAIL FAST
+        - label: P1-09 통합 테스트(드롭/지연/타임아웃/코덱 선택) 추가
+        - label: P1-10 문서(sip-roadmap.md, telemetry.md) 갱신 및 사용 가이드
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Definition of Done (요약)
+      description: 모든 체크 완료 + 30% 드롭 환경 성공률 ≥95% + 100 동시 INVITE 에러율 <2% + 문서/테스트 녹색
+      value: |
+        1. 체크박스 전체 완료
+        2. 테스트: 패킷 드롭 30% 재전송 성공률 >=95%
+        3. 부하: 100 동시 INVITE (mock) 에러율 <2%
+        4. Jest 전 테스트 녹색
+        5. 문서/Telemetry 갱신
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Metrics 증분 계획
+      description: 신규 메트릭 명세 및 대시보드 TODO
+      value: |
+        - mrcp_sip_provisional_total
+        - mrcp_sip_invite_retransmits_total
+        - mrcp_sip_invite_timeouts_total
+        - mrcp_sip_codec_offered
+        - mrcp_sip_invite_rtt_ms_sum / _count
+        - mrcp_sessions_mrcp_channel_total
+  - type: textarea
+    id: risks
+    attributes:
+      label: 리스크 & 완화 방안
+      value: |
+        - Timer race condition: 상태 전이 guard + exhaustive test
+        - NAT 바인딩 실패: 포트 바운드 실패 시 재시도 전략/로그
+        - 재전송 폭주: 상한(maxRetrans) + 지수 backoff
+  - type: textarea
+    id: notes
+    attributes:
+      label: 추가 메모
+      placeholder: 자유 입력

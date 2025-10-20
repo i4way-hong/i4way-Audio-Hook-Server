@@ -30,8 +30,8 @@ async function openSession(args: OpenSessionArgs): Promise<SignalingSession> {
   const payloadType = codec === 'PCMU' ? 0 : 96;
 
   // TODO: Replace with RTSP(SDP)/SIP(SDP) negotiation using UniMRCP
-  const remoteIp = process.env.MRCP_REMOTE_RTP_IP || u.hostname;
-  const remotePort = Number(process.env.MRCP_REMOTE_RTP_PORT || 5004);
+  const remoteIp = process.env['MRCP_REMOTE_RTP_IP'] || u.hostname;
+  const remotePort = Number(process.env['MRCP_REMOTE_RTP_PORT'] || 5004);
 
   const emitter = new EventEmitter();
   const timer = setTimeout(() => {

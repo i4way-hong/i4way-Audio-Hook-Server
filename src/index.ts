@@ -12,6 +12,7 @@ import secretsPlugin from './secrets-plugin';
 import { addAudiohookSampleRoute } from './audiohook-sample-endpoint';
 import { addAudiohookLoadTestRoute } from './audiohook-load-test-endpoint';
 import { addAudiohookVoiceTranscriptionRoute } from './audiohook-vt-endpoint';
+import sttConfig from '../audiohook/src/utils/stt-config';
 
 dotenv.config();
 
@@ -81,12 +82,43 @@ server.register(dynamodbPlugin);
 server.register(secretsPlugin);
 server.register(serviceLifecylePlugin);
 
-server.listen({
-    port: parseInt(process.env?.['SERVERPORT'] ?? '3000'),
-    host: process.env?.['SERVERHOST'] ?? '127.0.0.1'
-}).then(() => {
-    server.log.info(`Routes: \n${server.printRoutes()}`);
-}).catch(err => {
-    console.error(err);
-    process.exit(1);
-});
+async function bootstrap() {
+    try {
+        // STT 구성 요약 (서버 listen 이전에 출력해 조기 진단)
+        const proto = sttConfig.protocol;
+        const ep = sttConfig.endpoint || '(none)';
+        server.log.info(`[STT] Effective protocol='${proto}' endpoint='${ep}' enabled=${sttConfig.enabled}`);
+        if (proto === 'grpc') {
+            server.log.info(`[STT][gRPC] reconnectEnabled=${process.env['STT_GRPC_RECONNECT_ENABLED'] ?? sttConfig.reconnectEnabled} tlsClient=${process.env['STT_GRPC_TLS_ENABLED'] ?? 'false'}`);
+        }
+        if (proto === 'mrcp') {
+            server.log.warn('[STT][mrcp] MRCP mode active. If this is unexpected, check STT_PROTOCOL precedence (PowerShell $env overrides .env).');
+        }
+
+        // Start HTTP/WebSocket server
+        await server.listen({
+            port: parseInt(process.env?.['SERVERPORT'] ?? '3000'),
+            host: process.env?.['SERVERHOST'] ?? '127.0.0.1'
+        });
+        server.log.info(`Routes: \n${server.printRoutes()}`);
+
+        // (gRPC server removed) - using external STT gRPC test harness instead
+
+        const shutdown = async (signal: string) => {
+            server.log.warn(`Shutdown signal received: ${signal}`);
+            // no embedded gRPC server to shutdown
+            try {
+                await server.close();
+            } catch (e) {
+                server.log.error({ err: e }, 'Failed to close HTTP server');
+            }
+            process.exit(0);
+        };
+        ['SIGINT', 'SIGTERM'].forEach(sig => process.on(sig as NodeJS.Signals, () => void shutdown(sig)));
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
+}
+
+bootstrap();

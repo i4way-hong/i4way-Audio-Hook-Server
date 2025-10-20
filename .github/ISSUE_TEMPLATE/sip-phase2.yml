@@ -1,0 +1,57 @@
+name: SIP Phase 2 Epic
+description: Track Phase 2 (Stability + Real MRCP) tasks for SIP(MRCPv2)
+labels: ['sip','phase2','epic']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SIP Phase 2 Epic
+        목표: Dialog state(Early/Confirmed), CANCEL 지원, BYE 재시도/신뢰성, 실제 MRCP 메시지 파서/이벤트, Telemetry 확장(Recognize/Complete, codec 분포), partial/final 실제 메시지 전환.
+  - type: checkboxes
+    id: tasks
+    attributes:
+      label: Phase 2 Task Checklist
+      options:
+        - label: P2-01 Dialog state 관리 (Early→Confirmed) + state telemetry
+        - label: P2-02 CANCEL 처리 (487 응답 수신/검증)
+        - label: P2-03 BYE 재시도/타임아웃 처리 + bye 실패 카운터
+        - label: P2-04 MRCP 메시지 파서 (RECOGNIZE/STOP/COMPLETE) 최소 구현
+        - label: P2-05 ResultSimulator 제거 및 실제 MRCP event 연동
+        - label: P2-06 Telemetry: recognizeRequests, completeEvents, channelErrors
+        - label: P2-07 코덱 선택 분포 메트릭 (mrcp_sip_codec_selected_{codec}_total)
+        - label: P2-08 Latency 측정 (firstPartialMs, firstFinalMs) + histogram 준비
+        - label: P2-09 Long-run 안정성 테스트 (8h soak, leak 검사)
+        - label: P2-10 문서/로드맵 Phase2 완료 반영
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Definition of Done
+      value: |
+        1. 체크리스트 전체 완료
+        2. 8시간 soak test: 메모리 증가 <5% & 에러율 <1%
+        3. Partial/Final 실제 MRCP 메시지 기반 (시뮬레이터 제거)
+        4. Dialog/BYE/CANCEL 경로 테스트 모두 통과
+        5. 새 telemetry 필드 문서 + /metrics 노출
+  - type: textarea
+    id: telemetry
+    attributes:
+      label: Telemetry 확장 필드
+      value: |
+        - recognizeRequests
+        - recognizeCompleteEvents
+        - mrcpChannelErrors
+        - firstPartialLatencyMs / firstFinalLatencyMs
+        - codecSelected distribution counters
+  - type: textarea
+    id: risks
+    attributes:
+      label: 리스크 & 완화
+      value: |
+        - Parser 복잡도: 단계별 명령 subset → incremental tests
+        - BYE race: state guard + idempotent close 재검증
+        - Long-run drift: heap snapshot 주기 비교 스크립트
+  - type: textarea
+    id: notes
+    attributes:
+      label: 추가 메모
+      placeholder: 자유 입력

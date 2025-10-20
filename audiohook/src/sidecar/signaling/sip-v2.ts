@@ -9,6 +9,8 @@
 */
 import * as net from 'net';
 import { parseSdp } from './unimrcp-signaling'; // reuse existing SDP parser (ensure it's exported)
+import { MrcpTelemetry } from './telemetry';
+import { sipConfig } from './sip-config';
 
 export interface SipInviteResult {
   remotePort: number;
@@ -28,7 +30,7 @@ export interface SipInviteResult {
   };
 }
 
-export async function performSipInvite(endpoint: string, localIp: string, localPort: number, payloadType: number, timeoutMs = 4000): Promise<SipInviteResult> {
+export async function performSipInvite(endpoint: string, localIp: string, localPort: number, payloadType: number, timeoutMs = 4000, telemetry?: MrcpTelemetry): Promise<SipInviteResult> {
   if (process.env['MRCP_TEST_FORCE_SIP_TIMEOUT'] === '1') {
     // Consume flag so only the very first attempted INVITE fails; subsequent attempts succeed.
     delete process.env['MRCP_TEST_FORCE_SIP_TIMEOUT'];
@@ -45,14 +47,29 @@ export async function performSipInvite(endpoint: string, localIp: string, localP
   const from = `sip:audiohook@${localIp}`;
   const contact = `sip:audiohook@${localIp}`;
   const cseq = 1;
+  // Multi-codec offer (reuse logic similar to UDP)
+  const codecEnv = sipConfig.codecList; // sanitized
+  const known: { name: string; pt: number; rtpmap?: string }[] = [];
+  let dynPt = 96;
+  for (const c of codecEnv) {
+    const upper = c.toUpperCase();
+    if (upper === 'PCMU' && !known.find(k=>k.pt===0)) known.push({ name: 'PCMU', pt: 0, rtpmap: 'PCMU/8000' });
+    else if (upper === 'PCMA' && !known.find(k=>k.pt===8)) known.push({ name: 'PCMA', pt: 8, rtpmap: 'PCMA/8000' });
+    else if (upper === 'L16' || upper === 'L16/8000') {
+      if (!known.find(k=>k.name.startsWith('L16'))) { known.push({ name: 'L16', pt: dynPt++, rtpmap: 'L16/8000/1' }); }
+    }
+  }
+  if (known.length === 0) known.push({ name: 'PCMU', pt: 0, rtpmap: 'PCMU/8000' });
+  try { telemetry?.setSipCodecOffered(known.length); } catch { /* ignore */ }
+  const mPayloads = known.map(k=>k.pt).join(' ');
   const sdpLines = [
     'v=0',
     `o=- 0 0 IN IP4 ${localIp}`,
     's=AudioHook',
     `c=IN IP4 ${localIp}`,
     't=0 0',
-    `m=audio ${localPort} RTP/AVP ${payloadType}`,
-    'a=rtpmap:0 PCMU/8000',
+    `m=audio ${localPort} RTP/AVP ${mPayloads}`,
+    ...known.filter(k=>k.pt>=96).map(k=>`a=rtpmap:${k.pt} ${k.rtpmap}`),
   ];
   const sdp = sdpLines.join('\r\n') + '\r\n';
   const reqLines = [
@@ -80,6 +97,7 @@ export async function performSipInvite(endpoint: string, localIp: string, localP
       sock.destroy(new Error('SIP INVITE timeout')); // will trigger error handler below
     }, timeoutMs + 20);
     let buf = '';
+    const firstSendAt = Date.now();
   const cleanup = () => { clearTimeout(hardTimer); sock.removeAllListeners(); sock.destroy(); };
     sock.on('connect', () => { sock.write(rawReq); });
     sock.on('data', (chunk) => {
@@ -94,6 +112,15 @@ export async function performSipInvite(endpoint: string, localIp: string, localP
       }
       try {
         const { remotePort, payloadType: pt, ptimeMs } = parseSdp(body || '');
+        try {
+          const rtt = Date.now() - firstSendAt;
+          telemetry?.addSipInviteRtt(rtt);
+          if (typeof pt === 'number') {
+            const knownCodec = known.find(k=>k.pt===pt);
+            let codec = knownCodec ? knownCodec.name : (pt===0?'PCMU':pt===8?'PCMA':('PT'+pt));
+            telemetry?.setSipCodecSelected(codec);
+          }
+        } catch { /* noop */ }
         // Try to extract To tag
         let toTag: string | undefined;
         const toHeader = headers.split(/\r\n/).find(l => l.toLowerCase().startsWith('to:'));

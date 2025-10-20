@@ -41,16 +41,28 @@ const path = require('path');
 
 const PORT = parseInt(process.env.PORT || process.env.STT_TEST_PORT || '8080', 10);
 const WS_PATH = process.env.WS_PATH || process.env.PATHNAME || '/stt';
-// 추가: 바이너리 오디오 해석 설정
 const AUDIO_ENCODING = (process.env.AUDIO_ENCODING || 'PCMU').toUpperCase(); // 'PCMU' | 'L16'
 const CHANNELS = Math.max(1, parseInt(process.env.CHANNELS || '1', 10));
 const BYTES_PER_SAMPLE = AUDIO_ENCODING === 'L16' ? 2 : 1;
 const LOG_SAMPLES = Math.max(0, parseInt(process.env.LOG_SAMPLES || '8', 10));
+const LOG_JSON = /^(1|true|yes)$/i.test(process.env.LOG_JSON || '0');
+const CAPTURE_DIR = process.env.CAPTURE_DIR || 'captures';
+const MESSAGE_INTERVAL_MS = parseInt(process.env.MESSAGE_INTERVAL_MS || '3000', 10);
+const ECHO_TEXT = process.env.ECHO_TEXT;
 
-console.log(`[config] PORT=${PORT} WS_PATH=${WS_PATH} CHANNELS=${CHANNELS} AUDIO_ENCODING=${AUDIO_ENCODING} LOG_SAMPLES=${LOG_SAMPLES}`);
+function log(level, msg, extra) {
+    if (LOG_JSON) {
+        console.log(JSON.stringify({ ts: new Date().toISOString(), level, msg, ...(extra||{}) }));
+    } else {
+        const kv = Object.entries(extra||{}).map(([k,v])=>`${k}=${v}`).join(' ');
+        console.log(`[${level}] ${msg}${kv? ' '+kv:''}`);
+    }
+}
+
+log('info', 'config', { port: PORT, path: WS_PATH, channels: CHANNELS, audioEncoding: AUDIO_ENCODING, logSamples: LOG_SAMPLES, captureDir: CAPTURE_DIR });
 
 function makeCaptureDir() {
-    const dir = path.resolve(__dirname, 'captures');
+    const dir = path.resolve(__dirname, CAPTURE_DIR);
     try { fs.mkdirSync(dir, { recursive: true }); } catch {}
     return dir;
 }
@@ -86,7 +98,7 @@ const wss = new WebSocketServer({ server, path: WS_PATH });
 wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
     const auth = req.headers['authorization'] || '';
-    console.log(`[conn] ${ip} ${req.url} auth=${auth ? 'present' : 'none'}`);
+    log('info', 'conn', { ip, url: req.url, auth: !!auth });
 
     let bytes = 0;
     let frames = 0;
@@ -126,10 +138,10 @@ wss.on('connection', (ws, req) => {
 
     // 연결 직후 안내 메시지 전송
     try {
-        const welcome = `연결을 환영합니다. 현재 시간: ${new Date().toLocaleString()}`;
-        ws.send(welcome);
+        const welcomeText = ECHO_TEXT || `연결을 환영합니다. 현재 시간: ${new Date().toLocaleString()}`;
+        ws.send(welcomeText);
         sentTexts += 1;
-        console.log(`[send-text] ${welcome}`);
+        log('info', 'send_text', { preview: welcomeText.slice(0,80) });
     } catch {
         // ignore
     }
@@ -137,18 +149,16 @@ wss.on('connection', (ws, req) => {
     // 3초마다 클라이언트로 한글 텍스트 전송
     const speakTimer = setInterval(() => {
         if (ws.readyState === ws.OPEN) {
-            const msg = `안녕하세요! 테스트 서버에서 보내는 알림입니다. 현재 시간: ${new Date().toLocaleString()}`;
+            const msg = ECHO_TEXT || `안녕하세요! 테스트 서버에서 보내는 알림입니다. 현재 시간: ${new Date().toLocaleString()}`;
             try {
                 ws.send(msg);
                 sentTexts += 1;
-                console.log(`[send-text] ${msg}`);
-            } catch {
-                // ignore
-            }
+                log('info', 'send_text', { preview: msg.slice(0,80) });
+            } catch { /* ignore */ }
         } else {
             clearInterval(speakTimer);
         }
-    }, 3000);
+    }, Math.max(500, MESSAGE_INTERVAL_MS));
     if (typeof speakTimer.unref === 'function') {
         speakTimer.unref();
     }
@@ -181,7 +191,7 @@ wss.on('connection', (ws, req) => {
         }
         texts += 1;
         const s = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
-        console.log(`[text] ${s}`);
+    log('debug', 'text_recv', { len: s.length, preview: s.slice(0,80) });
         try {
             const obj = JSON.parse(s);
             if (obj && obj.type === 'init') {
@@ -196,16 +206,16 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', (code, reason) => {
         const r = Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason || '');
-        console.log(`[close] code=${code} reason=${r}`);
+    log('info', 'close', { code, reason: r });
         clearInterval(speakTimer);
         try { caps.combined.end(); } catch {}
         try { caps.rx.end(); } catch {}
         try { caps.tx.end(); } catch {}
-        console.log(`[capture] saved: combined=${caps.combinedPath} rx=${caps.rxPath} tx=${caps.txPath}`);
+    log('info', 'capture_saved', { combined: caps.combinedPath, rx: caps.rxPath, tx: caps.txPath });
     });
 
     ws.on('error', (err) => {
-        console.error(`[error] ${err?.message || err}`);
+    log('error', 'ws_error', { err: err?.message || String(err) });
     });
 
     const timer = setInterval(() => {
@@ -218,7 +228,7 @@ wss.on('connection', (ws, req) => {
                 return `${label}[${rendered}]`;
             });
             const chStats = rxChBytes.map((b, idx) => `${chLabels[idx] || `CH${idx}`}:${b}`).join(' ');
-            console.log(`[stats] rxFrames=${frames} rxBytes=${bytes} rxSamples=${rxSamples} rxTexts=${texts} ${chStats} txTexts=${sentTexts} previews=${prevParts.join(' | ')}`);
+            log('debug', 'stats', { rxFrames: frames, rxBytes: bytes, rxSamples, rxTexts: texts, channels: chStats, txTexts: sentTexts, previews: prevParts.join(' | ') });
             // reset window
             frames = 0;
             bytes = 0;
@@ -239,6 +249,5 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`STT test WS server listening on ws://0.0.0.0:${PORT}${WS_PATH}`);
-    console.log(`Health check:           http://0.0.0.0:${PORT}/health`);
+    log('info', 'listening', { proto: 'ws', url: `ws://0.0.0.0:${PORT}${WS_PATH}`, health: `http://0.0.0.0:${PORT}/health` });
 });

@@ -8,6 +8,9 @@ jest.setTimeout(15000);
 // 강제: native 비활성 & RTSP 강제 해제
 process.env['MRCP_DISABLE_NATIVE'] = '1';
 delete process.env['MRCP_FORCE_RTSP'];
+// 내장 gRPC 서버 제거 후 기본 STT_PROTOCOL=grpc 가 테스트 중 불필요한 gRPC 접속 시도를 유발할 수 있으므로
+// 본 테스트는 SIP(MRCP) 경로만 검증하도록 STT_PROTOCOL=mrcp 강제 설정
+process.env['STT_PROTOCOL'] = 'mrcp';
 
 const signalingModulePath = require.resolve('../../src/sidecar/signaling/unimrcp-signaling');
 // eslint-disable-next-line @typescript-eslint/no-dynamic-delete

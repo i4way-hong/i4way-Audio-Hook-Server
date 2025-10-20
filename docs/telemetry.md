@@ -1,94 +1,123 @@
-# MRCP Signaling Telemetry
+<!-- Consolidated Phase 1 Telemetry Document -->
+# Telemetry Reference (Phase 1 Completion)
 
-이 문서는 `openSession()` 으로 생성된 세션의 `session.getTelemetry()` 스냅샷 필드와 의미를 정의합니다.
+본 문서는 MRCP Sidecar 세션/프로토콜 Telemetry 전 범위를 Phase 1 마감 시점 기준으로 통합 정리합니다.
 
-## 사용 방법
-```ts
-const session = await openSession({ endpoint, profileId, codec: 'PCMU' });
-const snap = session.getTelemetry();
-console.log(snap);
-```
-스냅샷은 불변 객체이며 호출 시점까지 누적된 카운터 snapshot 입니다.
+## 1. 수집 레이어 개요
+| 레이어 | 역할 | 비고 |
+|--------|------|------|
+| Per-Session Telemetry (MrcpTelemetry) | 세션 단위 이벤트/카운터 누적 | `session.getTelemetry()` |
+| Prometheus Exporter | 누적/집계/라벨 변환 | /metrics_endpoint |
+| Network Simulator (테스트) | UDP 송신 drop/지연 주입 | 테스트 전용 env 제어 |
 
-## 필드 정의
-| 필드 | 타입 | 의미 |
+## 2~12 세부 (기존 문단 통합)
+아래는 Phase 1 동안 정의된 모든 필드/메트릭/시뮬레이터 변수입니다. 중복 표기는 최신 규칙으로 재정렬했습니다.
+
+## 2. 세션/결과 이벤트 필드
+| 필드 | 타입 | 설명 |
 |------|------|------|
-| version | number | Telemetry 스키마 버전 (현재 1) |
-| partialCount | number | 수신한 partial (중간) 결과 이벤트 수 |
-| finalCount | number | 최종 결과 이벤트 수 |
-| errorCount | number | `emitter.emit('error', ...)` 로 관찰된 오류 이벤트 수 |
-| lastFinalLatencyMs | number? | 마지막 final 결과 이벤트에 포함된 latencyMs 값 (있다면) |
-| startedAt | number (epoch ms) | Telemetry 인스턴스 생성 시각 |
-| resultEventsTotal | number | result 이벤트 총 개수 (partial + final) |
-| resultTextBytes | number | result 이벤트의 text 필드 UTF-8 바이트 누적 합 |
-| inviteRetries | number? | SIP INVITE 재시도 횟수 (성공 혹은 실패까지 시도한 추가 횟수; 1회 이상일 때만 노출) |
-| inviteTimeouts | number? | SIP INVITE 시도 중 timeout 으로 간주된 횟수 (1회 이상일 때만 노출) |
-| sipAttempts | number | SIP INVITE 시도 총 수 (timeout 포함) |
-| sipSuccess | number | SIP INVITE 성공 횟수 (현재 구현에서는 0 또는 1) |
-| sipFail | number | SIP INVITE 완전 실패(모든 재시도 실패) 횟수 |
-| rtspDescribeAttempts | number | RTSP DESCRIBE 시도 횟수 (재시도 포함) |
-| rtspDescribeFail | number | DESCRIBE 최종 실패 횟수 (fallback 유발) |
-| rtspSetupAttempts | number | RTSP SETUP 시도 횟수 |
-| rtspSetupFail | number | SETUP 최종 실패 횟수 (SDP port fallback 사용) |
-| fallback5004Count | number | DESCRIBE / SETUP 모두 실패하여 최종 5004 기본 포트 fallback 사용한 횟수 |
-| sessionsSip | number | 이 Telemetry 객체 하에서 SIP 전송방식 세션 수 (현재 0 또는 1) |
-| sessionsRtsp | number | RTSP 전송방식 세션 수 (현재 0 또는 1, fallback 포함) |
-| lastErrorCode | string? | 마지막 오류 이벤트의 `code` (예: SIP_INVITE_FAILED, RTSP_FALLBACK_5004 등) |
-| rtpPacketsReceived | number? | (옵션) RTP listen 활성화 시 관측된 RTP 패킷 수 |
+| version | number | Telemetry 스키마 버전 (현재 2) |
+| startedAt / endedAt | number(ms) | 세션 시작/종료 시각 |
+| sessionDurationMs | number? | 종료 후 계산 |
+| partialCount / finalCount | number | 인식 이벤트 수 |
+| resultEventsTotal | number | partial + final |
+| resultTextBytes | number | 텍스트 결과 UTF-8 총 바이트 |
+| lastFinalLatencyMs | number? | 최종 결과 latency 필드 |
+| errorCount | number | error 이벤트 수 |
+| lastErrorCode | string? | 마지막 error code |
+| sessionsClosed | number | (현재 0|1) 세션 종료 기록 |
 
-### inviteRetries 계산식
-- 시도 횟수 = attempts
-- 최초 attempt 는 재시도가 아니므로 `inviteRetries = attempts - 1` (단, attempts > 1 일 때만).
-- 성공이든 실패든 최종 종료 시점에 누적.
+## 3. SIP / RTSP / Fallback 카운터
+| 필드 | 설명 |
+|------|------|
+| sipAttempts / sipSuccess / sipFail | 전체 SIP 시도/성공/최종 실패 |
+| sipUdpAttempts / sipUdpSuccess / sipUdpFail | UDP 경로 세부 |
+| sipTcpAttempts / sipTcpSuccess / sipTcpFail | TCP 경로 세부 |
+| inviteRetries | (attempts - 1) 재전송 횟수 (>0 시 노출) |
+| inviteTimeouts | Timer B 기반 실패 횟수 |
+| sipProvisional | 1xx 수신 횟수 |
+| sipInviteRetransmits | 1차 전송 이후 재전송 카운트 |
+| sipCodecOffered / sipCodecSelected | SDP offer codec 개수 / answer 선택명 |
+| sipInviteRttSumMs / sipInviteRttCount | RTT 누적/샘플 수 |
+| sessionsSip | SIP로 확립된 세션 (0|1) |
+| sessionsRtsp | RTSP로 확립된 세션 (0|1) |
+| fallback5004Count | SIP/RTSP 모두 실패 후 단순 포트 fallback |
 
-### inviteTimeouts 증가 조건
-- 개별 attempt 에서 timeout string 을 포함한 실패 메시지가 발생한 경우.
+파생: averageInviteRttMs = Sum / Count.
 
-## Snapshot 호출 비용
-단순한 POJO 생성이므로 가볍습니다. 고빈도(초당 수 회) 호출 가능하지만, 밀리초 단위 polling 은 권장하지 않습니다.
+## 4. RTSP 세부
+| 필드 | 설명 |
+|------|------|
+| rtspDescribeAttempts / rtspDescribeFail | DESCRIBE 재시도/최종 실패 |
+| rtspSetupAttempts / rtspSetupFail | SETUP 재시도/최종 실패 |
 
-## Error Buffer (`session.getBufferedErrors()`)
-- 최근 최대 10개의 error 이벤트 객체를 보관.
-- Telemetry 카운터와는 별개로, 초기 listener 부착 이전 오류도 접근 가능.
+## 5. RTP 관측
+| 필드 | 설명 |
+|------|------|
+| rtpPacketsReceived | MRCP_ENABLE_RTP_LISTEN 활성 시 관찰 패킷 수 |
 
-## 확장 가이드
-새로운 카운터 추가 시:
-1. `MrcpTelemetry` private 필드 & 증가 메서드 추가
-2. `snapshot()` 리턴 객체에 필드 포함 (0일 때 노출 여부 정책 결정)
-3. 테스트 추가 (성공/실패/경계 케이스)
+## 6. MRCP 채널 (Stub)
+| 필드 | 설명 |
+|------|------|
+| sessionsMrcpChannel | Stub 채널 생성 세션 카운터 |
 
-## 예시 출력 (version 1)
-```json
-{
-  "version": 1,
-  "partialCount": 3,
-  "finalCount": 1,
-  "errorCount": 0,
-  "lastFinalLatencyMs": 712,
-  "startedAt": 1758871500123,
-  "resultEventsTotal": 4,
-  "resultTextBytes": 57,
-  "inviteRetries": 1,
-  "inviteTimeouts": 1,
-  "sipAttempts": 2,
-  "sipSuccess": 1,
-  "sipFail": 0,
-  "rtspDescribeAttempts": 0,
-  "rtspDescribeFail": 0,
-  "rtspSetupAttempts": 0,
-  "rtspSetupFail": 0,
-  "fallback5004Count": 0,
-  "sessionsSip": 1,
-  "sessionsRtsp": 0,
-  "lastErrorCode": "SOME_CODE",
-  "rtpPacketsReceived": 42
-}
+## 7. Prometheus 매핑 (요약)
+| Metric | From | 비고 |
+|--------|------|------|
+| mrcp_sip_attempts_total | sipAttempts | counter |
+| mrcp_sip_invite_timeouts_total | inviteTimeouts | counter |
+| mrcp_sip_invite_retransmits_total | sipInviteRetransmits | counter |
+| mrcp_sip_provisional_total | sipProvisional | counter |
+| mrcp_rtp_packets_received_total | rtpPacketsReceived | counter |
+| mrcp_sip_codec_offered | sipCodecOffered | gauge |
+| mrcp_sip_codec_selected{codec} | sipCodecSelected | gauge=1 label codec |
+| mrcp_sessions | sessionsSip + sessionsRtsp + fallback | counter aggregate |
+
+## 8. 네트워크 시뮬레이터 ENV (테스트)
+| 변수 | 설명 |
+|------|------|
+| MRCP_SIP_TEST_PACKET_DROP_RATE | 1차 전송(또는 persistent) 드롭 확률 |
+| MRCP_SIP_TEST_PACKET_DELAY_MS | 고정 지연 |
+| MRCP_SIP_TEST_PACKET_JITTER_MS | +/- 지터 범위 |
+| MRCP_SIP_TEST_SEED | RNG 시드 |
+| MRCP_SIP_TEST_PERSISTENT_DROP | '1' 재전송에도 확률 적용 |
+| MRCP_SIP_TEST_LOG | '1' 결정 로그 출력 |
+| MRCP_TEST_ALLOW_LOW_TIMEOUT | SIP 타임아웃 하한 우회 (테스트) |
+
+## 9. 사용 예시 (코드)
+```ts
+const session = await openSession({ endpoint: 'sip://127.0.0.1:5060/unimrcp', profileId: 'ah-mrcpv2', codec: 'PCMU', sampleRate: 8000 });
+// ... 음성 처리 후
+session.close();
+const snap = session.getTelemetry();
+console.log('inviteTimeouts', snap.inviteTimeouts);
 ```
 
-## 주의 사항
-- 카운터는 프로세스 내 단일 세션 객체 기준 (현재 구현은 세션별 Telemetry). 프로세스 전역 집계가 필요하면 별도 aggregator 레이어 추가 권장.
-- Native binding 경로에서도 동일 구조를 유지하도록 추후 확장 시 snapshot 정합성 유지.
+## 10. PromQL 예시
+```
+rate(mrcp_sip_invite_retransmits_total[5m])
+rate(mrcp_sip_invite_timeouts_total[5m]) / rate(mrcp_sip_attempts_total[5m])
+rate(mrcp_rtp_packets_received_total[1m])
+```
 
-## 향후(v2) 확장 예정
-- SIP UDP / TCP 분리 카운터 (예: sipUdpAttempts, sipUdpSuccess 등)
-- 전역 aggregator (multi-process) 예시
+## 11. 트러블슈팅 매핑
+| 증상 | 확인 우선 순위 |
+|------|----------------|
+| SIP 빈번 타임아웃 | inviteTimeouts, sipInviteRttSumMs 증가, 네트워크 시뮬레이터 비의도 설정 여부 |
+| RTT 급증 | averageInviteRttMs 추세 + drop_rate env 확인 |
+| RTP 무수신 | rtpPacketsReceived=0 + SDP remotePort 검사 |
+
+## 12. 버전 이력
+| 버전 | 변경 요약 |
+|------|-----------|
+| v2 | SIP UDP/TCP 분리 카운터, codec metrics, RTT 집계, network simulator hook |
+| v1 | 기본 세션/RTSP 카운터 |
+
+## 13. Phase 2 미리보기 (제안)
+- RTT histogram (p50/p95/p99)
+- codec negotiation 실패 유형 카운터 (unsupported-answer, answer-mismatch)
+- retransmit 분포(hist)
+- 채널 이벤트 latency 측정 (partial→final)
+
+---
+Phase 1 완료 기준 문서. 변경 시 CHANGELOG 및 본 문서 동시 갱신.
