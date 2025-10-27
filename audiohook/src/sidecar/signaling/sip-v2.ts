@@ -49,7 +49,7 @@ export async function performSipInvite(endpoint: string, localIp: string, localP
   const cseq = 1;
   // Multi-codec offer (reuse logic similar to UDP)
   const codecEnv = sipConfig.codecList; // sanitized
-  const known: { name: string; pt: number; rtpmap?: string }[] = [];
+  const known: Array<{ name: string; pt: number; rtpmap?: string }> = [];
   let dynPt = 96;
   for (const c of codecEnv) {
     const upper = c.toUpperCase();
@@ -117,7 +117,7 @@ export async function performSipInvite(endpoint: string, localIp: string, localP
           telemetry?.addSipInviteRtt(rtt);
           if (typeof pt === 'number') {
             const knownCodec = known.find(k=>k.pt===pt);
-            let codec = knownCodec ? knownCodec.name : (pt===0?'PCMU':pt===8?'PCMA':('PT'+pt));
+            const codec = knownCodec ? knownCodec.name : (pt===0?'PCMU':pt===8?'PCMA':('PT'+pt));
             telemetry?.setSipCodecSelected(codec);
           }
         } catch { /* noop */ }

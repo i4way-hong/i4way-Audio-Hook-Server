@@ -17,6 +17,10 @@
 | MRCP_TEST_DEBUG | (unset) | 설정 시 RTSP/SIP 네트워크 파싱 디버그 로그 출력 |
 | MRCP_ENABLE_RTP_LISTEN | (unset) | 세션 생성 시 추가 UDP 소켓 바인드 후 수신 RTP 패킷 카운트 (관측용) |
 | MRCP_ENABLE_SIP_V2 | (unset) | SIP UDP INVITE 스켈레톤 활성화 (실패 시 TCP → RTSP 폴백) |
+| CONVERSATION_LOOKUP_URL | (unset) | 세션 `conversationId`로 호출할 외부 메타데이터 조회 엔드포인트(HTTP/HTTPS). 비워두면 조회 비활성화 |
+| CONVERSATION_LOOKUP_QUERY_PARAM | conversation_id | 조회 시 사용할 쿼리 파라미터명 |
+| CONVERSATION_LOOKUP_TIMEOUT_MS | 3000 | 조회 HTTP 요청 타임아웃(ms) |
+| CONVERSATION_LOOKUP_CACHE_SECONDS | 30 | 동일 ID 결과 캐시 TTL(초) |
 
 ## 사용 예
 PowerShell:

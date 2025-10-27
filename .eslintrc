@@ -13,12 +13,16 @@
         "plugin:@typescript-eslint/recommended"
     ],
     "rules": {
-        "@typescript-eslint/array-type": ["error", {"default": "array-simple"}],
-        "@typescript-eslint/brace-style": ["error", "1tbs"],
-        "@typescript-eslint/indent": ["error", 4],
+    "@typescript-eslint/array-type": ["error", {"default": "array-simple"}],
+    "@typescript-eslint/brace-style": "off",
+    "indent": "off",
         "@typescript-eslint/no-parameter-properties": "off",
-        "@typescript-eslint/quotes": ["error", "single"],
-        "curly": ["error", "all"],
+        "@typescript-eslint/no-var-requires": "off",
+        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/no-non-null-assertion": "off",
+        "@typescript-eslint/no-unused-vars": "off",
+    "@typescript-eslint/quotes": ["error", "single"],
+    "curly": "off",
         "object-curly-spacing": ["error", "always"],
         "semi": ["error", "always"]
     }

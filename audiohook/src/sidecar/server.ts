@@ -325,7 +325,11 @@ async function startWs() {
     // 실제 바인딩된 포트 (PORT=0 인 경우 OS 할당)
     const addr = fastify.server.address();
     const actualPort = typeof addr === 'object' && addr ? (addr as any).port : PORT;
-    fastify.log.info(`WS sidecar listening ws://127.0.0.1:${actualPort}${PATHNAME}`);
+    const announce = () => fastify.log.info(`WS sidecar listening ws://127.0.0.1:${actualPort}${PATHNAME}`);
+    announce();
+    setTimeout(announce, 250);
+    setTimeout(announce, 1250);
+    setTimeout(announce, 2250);
 }
 
 // ---------------- gRPC 사이드카 ----------------

@@ -41,7 +41,7 @@ export async function performSipInviteUdp(opts: SipUdpInviteOptions): Promise<Si
 
   // Multi-codec offer support (Bundle 2)
   const codecEnv = sipConfig.codecList; // already sanitized upper-case names
-  const known: { name: string; pt: number; rtpmap?: string }[] = [];
+  const known: Array<{ name: string; pt: number; rtpmap?: string }> = [];
   const dynStart = 96;
   let dynPt = dynStart;
   for (const c of codecEnv) {
@@ -138,9 +138,20 @@ export async function performSipInviteUdp(opts: SipUdpInviteOptions): Promise<Si
         currentDelay = Math.min(currentDelay * 2, t2);
       }
       const u8 = new Uint8Array(rawReq);
-      simulatedSend({ socket: sock, msg: u8, port, host, sim: getSim(), attempt: transmitCount + 1, onSend: (err) => {
-        if (err) { cleanup(); return reject(err); }
-      }});
+      simulatedSend({
+        socket: sock,
+        msg: u8,
+        port,
+        host,
+        sim: getSim(),
+        attempt: transmitCount + 1,
+        onSend: (err) => {
+          if (err) {
+            cleanup();
+            return reject(err);
+          }
+        },
+      });
       if (!firstSendAt) firstSendAt = Date.now();
       scheduleTimerA();
     };

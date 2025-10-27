@@ -19,7 +19,7 @@ export class MrcpStreamParser {
 
   constructor(
     private readonly onMessage: MrcpMessageHandler,
-    private readonly onError: MrcpParserErrorHandler = () => {},
+    private readonly onError: MrcpParserErrorHandler = () => undefined,
     opts: { maxHeaderSize?: number; maxBodySize?: number } = {},
   ) {
     this.maxHeaderSize = opts.maxHeaderSize ?? 32 * 1024;
@@ -38,7 +38,7 @@ export class MrcpStreamParser {
   }
 
   private drain(): void {
-    while (true) {
+    while (this.buffer.length > 0) {
       const boundary = this.buffer.indexOf('\r\n\r\n');
       if (boundary === -1) return; // 헤더 부족
       if (boundary > this.maxHeaderSize) throw new Error('MRCP header too large');

@@ -1,5 +1,9 @@
 # AudioHook Reference Implementation
 
+## Prerequisites
+- Node.js 22.0.0 이상
+- npm 10 이상
+
 # Audiohook Sidecar - UniMRCP Integration Guide
 
 ## 네이티브 UniMRCP SDK 연동 빌드
@@ -123,6 +127,20 @@ STT_WS_BYE_JSON={"type":"bye"}
 # STT_TCP_INIT_HEX=0a0b
 # STT_TCP_BYE_HEX=ff
 ```
+
+### 대화 조회 메타데이터 전파
+- `CONVERSATION_LOOKUP_URL=https://lookup.example.com/session` : 통화/세션 메타데이터를 조회할 외부 HTTP(S) 엔드포인트. 비워두면 기능 비활성화.
+- `CONVERSATION_LOOKUP_QUERY_PARAM=conversation_id` : 조회 시 사용할 쿼리 파라미터명.
+- `CONVERSATION_LOOKUP_TIMEOUT_MS=3000` : HTTP 요청 타임아웃(ms).
+- `CONVERSATION_LOOKUP_CACHE_SECONDS=30` : 동일 ID 재조회 캐시 TTL(초).
+
+세션이 `open`될 때 `conversationId`가 존재하면 위 설정을 이용해 메타데이터를 조회 후 세션 객체에 저장합니다. STT 포워더 생성 시 자동으로 아래와 같이 전파됩니다.
+
+- WebSocket: INIT JSON이 객체 형태면 해당 필드에 병합되고, 아닐 경우 별도의 `conversationMetadata` 메시지를 추가로 송신합니다.
+- TCP: 연결 직후 프레이밍 규칙(len32/raw/newline)에 맞춰 `{"type":"conversationMetadata", ...}` JSON을 추가로 송신합니다.
+- gRPC: `SessionInit.tags`에 낙타/스네이크 케이스 키를 문자열로 플랫팅해 포함하고, 원본 JSON은 `vendor_params.conversation_metadata` 및 `conversation_lookup` 키로 전달됩니다.
+
+조회 결과가 없거나 기능이 비활성화된 경우 기존 동작과 동일하게 INIT/오디오만 송신합니다.
 
 ## 로깅 요약
 - 개발 모드(NODE_ENV != production)

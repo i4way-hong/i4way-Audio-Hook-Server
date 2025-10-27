@@ -14,7 +14,7 @@ export function unregisterTelemetryProvider(p: Provider): void {
 
 // Simple Prometheus exposition (no external deps)
 export function renderMetrics(): string {
-  let agg: Partial<MrcpTelemetrySnapshot> & { sessions: number } = { sessions: 0 };
+  const agg: Partial<MrcpTelemetrySnapshot> & { sessions: number } = { sessions: 0 };
   for (const p of providers) {
     try {
       const snap = p();

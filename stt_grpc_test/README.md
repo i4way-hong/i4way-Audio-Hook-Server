@@ -8,6 +8,7 @@
 - Authorization 메타데이터 (옵션)
 - TLS / mTLS (옵션)
 - transcript 주기 및 final 지연 환경 변수로 조정
+- 오디오 패킷 집계 후 JSON 요약을 WebSocket 으로 전달 (옵션)
 
 ## 환경 변수 (.env 또는 PowerShell $env:...)
 | 변수 | 기본 | 설명 |
@@ -29,6 +30,11 @@
 | RANDOM_STREAM_ERROR_CODES | INTERNAL,RESOURCE_EXHAUSTED,ABORTED | 위 확률 적용 시 랜덤 선택 코드 목록 |
 | RANDOM_FINAL_ERROR_CODES | INTERNAL | final 에러 주입 시 사용할 코드 후보 목록 |
 | GRPC_TEST_PROTO_PATH | (자동 탐색) | 기본 proto 경로 탐색 실패 시 명시적 지정 (speech_transcription.proto 위치) |
+| OUTBOUND_PACKET_INTERVAL | 10 | 오디오 패킷 N개마다 요약 JSON 생성 (flush 시에도 동일 구조) |
+| FORWARD_WS_URL | (없음) | 설정 시 요약 JSON payload를 지정 WebSocket endpoint로 전송 |
+| FORWARD_WS_RETRY_MS | 5000 | WebSocket 끊김 발생 시 재접속 대기(ms) |
+| FORWARD_WS_MAX_QUEUE | 200 | 연결 재시도 중 보관할 최대 메시지 수 (0이면 큐잉 비활성화) |
+| OUTBOUND_JSON_TEMPLATE | (없음) | 기본 JSON 템플릿 (환경변수 문자열, JSON.parse 가능해야 함) |
 
 ## 실행
 ```

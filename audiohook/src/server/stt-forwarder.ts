@@ -15,6 +15,67 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import path from 'path';
 
+export type ConversationMetadataRecord = Record<string, unknown>;
+export interface SttForwarderMetadata {
+    conversationId?: string;
+    conversationRecords?: ConversationMetadataRecord[];
+}
+
+export interface SttForwarderOptions {
+    metadata?: SttForwarderMetadata;
+}
+
+function hasConversationMetadata(metadata?: SttForwarderMetadata): metadata is SttForwarderMetadata {
+    if (!metadata) {
+        return false;
+    }
+    const hasId = typeof metadata.conversationId === 'string' && metadata.conversationId.length > 0;
+    const hasRecords = Array.isArray(metadata.conversationRecords) && metadata.conversationRecords.length > 0;
+    return hasId || hasRecords;
+}
+
+function buildConversationEnvelope(metadata: SttForwarderMetadata, options?: { includeSnakeCase?: boolean }): Record<string, unknown> {
+    const includeSnakeCase = options?.includeSnakeCase ?? true;
+    const envelope: Record<string, unknown> = {};
+    if (metadata.conversationId) {
+        envelope['conversationId'] = metadata.conversationId;
+        if (includeSnakeCase) {
+            envelope['conversation_id'] = metadata.conversationId;
+        }
+    }
+    if (Array.isArray(metadata.conversationRecords) && metadata.conversationRecords.length > 0) {
+        envelope['conversationLookup'] = metadata.conversationRecords;
+        if (includeSnakeCase) {
+            envelope['conversation_lookup'] = metadata.conversationRecords;
+        }
+        const count = metadata.conversationRecords.length;
+        envelope['conversationLookupCount'] = count;
+        if (includeSnakeCase) {
+            envelope['conversation_lookup_count'] = count;
+        }
+    }
+    return envelope;
+}
+
+function flattenConversationEnvelope(envelope: Record<string, unknown>): Record<string, string> {
+    const tags: Record<string, string> = {};
+    for (const [key, value] of Object.entries(envelope)) {
+        if (value === undefined || value === null) {
+            continue;
+        }
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            tags[key] = String(value);
+        } else {
+            try {
+                tags[key] = JSON.stringify(value);
+            } catch {
+                tags[key] = String(value);
+            }
+        }
+    }
+    return tags;
+}
+
 export interface SttForwarder {
     start(): Promise<void>;
     stop(): Promise<void>;
@@ -76,15 +137,18 @@ function buildPayload(frame: MediaDataFrame, logger: Logger, warned: { rate: boo
 
 class WebSocketForwarder implements SttForwarder {
     private ws: WebSocket | null = null;
-    private pingTimer: NodeJS.Timer | null = null;
+    private pingTimer: NodeJS.Timeout | null = null;
     private readonly logger: Logger;
     private warnedRateMismatch = false;
     private vendor: SttVendorPlugin | null = null;
     private wsReconnectTimer: NodeJS.Timeout | null = null;
     private wsReconnectDelayMs: number | null = null;
 
-    constructor(logger: Logger) {
+    private readonly metadata?: SttForwarderMetadata;
+
+    constructor(logger: Logger, options?: SttForwarderOptions) {
         this.logger = logger;
+        this.metadata = options?.metadata;
         this.vendor = getVendorPlugin(sttConfig.vendorPlugin ?? null, (m) => this.logger.debug(m));
         const init = sttConfig.reconnectInitialMs ?? 500;
         this.wsReconnectDelayMs = Math.max(10, init);
@@ -104,22 +168,70 @@ class WebSocketForwarder implements SttForwarder {
         }, sec * 1000);
         // Avoid keeping the process alive if tests forget to stop
         (timer as unknown as { unref?: () => void }).unref?.();
-        this.pingTimer = timer as unknown as NodeJS.Timer;
+        this.pingTimer = timer;
     }
 
     private maybeSendInit(): void {
+        const { payload, metadataIncluded } = this.buildInitPayload();
+        if (payload) {
+            try {
+                this.ws?.send(payload);
+                this.logger.debug('STT WS init sent');
+            } catch (e) {
+                this.logger.warn(`STT WS init send failed: ${(e as Error).message}`);
+            }
+        }
+        if (!metadataIncluded) {
+            this.sendMetadataFallback();
+        }
+    }
+
+    private buildInitPayload(): { payload?: string; metadataIncluded: boolean } {
         let payload = this.vendor?.wsInit?.();
         if (payload === undefined || payload === null) {
             payload = sttConfig.wsInitJson ?? undefined;
         }
-        if (!payload) {
+        const metadata = this.metadata;
+        if (!hasConversationMetadata(metadata)) {
+            return { payload, metadataIncluded: false };
+        }
+        if (!payload || payload.trim().length === 0) {
+            const enriched = JSON.stringify(buildConversationEnvelope(metadata, { includeSnakeCase: false }));
+            return { payload: enriched, metadataIncluded: true };
+        }
+        const trimmed = payload.trim();
+        if (trimmed.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(payload) as Record<string, unknown>;
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    const merged = { ...parsed };
+                    const envelope = buildConversationEnvelope(metadata, { includeSnakeCase: false });
+                    Object.assign(merged, envelope);
+                    return { payload: JSON.stringify(merged), metadataIncluded: true };
+                }
+            } catch (err) {
+                this.logger.warn(`STT WS init payload parse failed (${(err as Error)?.message ?? String(err)}); sending metadata separately`);
+            }
+        } else {
+            this.logger.warn('STT WS init payload is not JSON; sending metadata separately');
+        }
+        return { payload, metadataIncluded: false };
+    }
+
+    private sendMetadataFallback(): void {
+        const metadata = this.metadata;
+        if (!hasConversationMetadata(metadata)) {
             return;
         }
         try {
+            const payload = JSON.stringify({
+                type: 'conversationMetadata',
+                ...buildConversationEnvelope(metadata, { includeSnakeCase: false })
+            });
             this.ws?.send(payload);
-            this.logger.debug('STT WS init sent');
-        } catch (e) {
-            this.logger.warn(`STT WS init send failed: ${(e as Error).message}`);
+            this.logger.debug('STT WS conversation metadata sent separately');
+        } catch (err) {
+            this.logger.warn(`STT WS metadata send failed: ${(err as Error)?.message ?? String(err)}`);
         }
     }
 
@@ -306,8 +418,11 @@ class TcpForwarder implements SttForwarder {
     private reconnectDelayMs: number | null = null;
     private vendor: SttVendorPlugin | null = null;
 
-    constructor(logger: Logger) {
+    private readonly metadata?: SttForwarderMetadata;
+
+    constructor(logger: Logger, options?: SttForwarderOptions) {
         this.logger = logger;
+        this.metadata = options?.metadata;
         this.vendor = getVendorPlugin(sttConfig.vendorPlugin ?? null, (m) => this.logger.debug(m));
         this.reconnectDelayMs = Math.max(10, sttConfig.reconnectInitialMs ?? 500);
     }
@@ -383,6 +498,24 @@ class TcpForwarder implements SttForwarder {
         this.logger.warn(`STT TCP reconnect in ${delay} ms`);
         this.reconnectTimer = setTimeout(() => this.start().catch(() => undefined), delay);
         this.reconnectDelayMs = Math.min(max, Math.floor(delay * factor));
+    }
+
+    private sendMetadataIfNeeded(sock: Socket): void {
+        const metadata = this.metadata;
+        if (!hasConversationMetadata(metadata)) {
+            return;
+        }
+        try {
+            const payload = JSON.stringify({
+                type: 'conversationMetadata',
+                ...buildConversationEnvelope(metadata, { includeSnakeCase: false })
+            });
+            const framed = this.frameBuffer(Buffer.from(payload, 'utf8'));
+            sock.write(framed as unknown as Uint8Array);
+            this.logger.debug('STT TCP conversation metadata sent');
+        } catch (err) {
+            this.logger.warn(`STT TCP metadata send failed: ${(err as Error)?.message ?? String(err)}`);
+        }
     }
 
     async start(): Promise<void> {
@@ -466,6 +599,7 @@ class TcpForwarder implements SttForwarder {
                         this.logTcpTextPreview(buf);
                     }
                 });
+                this.sendMetadataIfNeeded(sock);
                 // INIT
                 if (sttConfig.tcpInitHex) {
                     try {
@@ -568,6 +702,7 @@ class TcpForwarder implements SttForwarder {
 // gRPC 포워더 구현: proto/speech_transcription.proto 의 StreamingRecognize 호출
 class GrpcForwarder implements SttForwarder {
     private readonly logger: Logger;
+    private readonly metadata?: SttForwarderMetadata;
     private started = false;
     private client: any; // eslint-disable-line @typescript-eslint/no-explicit-any
     private stream: grpc.ClientDuplexStream<any, any> | null = null; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -575,10 +710,11 @@ class GrpcForwarder implements SttForwarder {
     private initSent = false;
     private reconnecting = false;
     private reconnectAttempt = 0;
-    private partialBuffer: string = '';
+    private partialBuffer = '';
 
-    constructor(logger: Logger) {
+    constructor(logger: Logger, options?: SttForwarderOptions) {
         this.logger = logger;
+        this.metadata = options?.metadata;
     }
 
     private buildClient() {
@@ -719,6 +855,20 @@ class GrpcForwarder implements SttForwarder {
             }
             chosenRate = forced;
         }
+        const metadataEnvelope = hasConversationMetadata(this.metadata)
+            ? buildConversationEnvelope(this.metadata, { includeSnakeCase: true })
+            : null;
+        const metadataTags = metadataEnvelope ? flattenConversationEnvelope(metadataEnvelope) : undefined;
+        const vendorParams: Record<string, string> = {};
+        if (metadataEnvelope) {
+            vendorParams['conversation_metadata'] = JSON.stringify(metadataEnvelope);
+        }
+        if (this.metadata?.conversationRecords && this.metadata.conversationRecords.length > 0) {
+            vendorParams['conversation_lookup'] = JSON.stringify(this.metadata.conversationRecords);
+        }
+        const clientSessionId = this.metadata?.conversationId && this.metadata.conversationId.length > 0
+            ? this.metadata.conversationId
+            : `cli-${Date.now()}`;
         const initMsg = {
             init: {
                 language_code: 'ko-KR',
@@ -727,11 +877,15 @@ class GrpcForwarder implements SttForwarder {
                 enable_interim_results: true,
                 single_utterance: false,
                 enable_word_time_offsets: false,
-                vendor_params: {},
+                vendor_params: vendorParams,
                 trace_context: process.env['TRACEPARENT'] ? { traceparent: process.env['TRACEPARENT'] } : undefined,
             },
-            client_session_id: `cli-${Date.now()}`,
+            client_session_id: clientSessionId,
+            tags: metadataTags && Object.keys(metadataTags).length > 0 ? metadataTags : undefined,
         };
+        if (metadataEnvelope) {
+            this.logger.debug('STT gRPC init includes conversation metadata');
+        }
         try {
             if (localStream) localStream.write(initMsg);
             this.initSent = true;
@@ -827,14 +981,14 @@ class GrpcForwarder implements SttForwarder {
     }
 }
 
-export function createSttForwarder(protocol: SttProtocol, logger: Logger): SttForwarder {
+export function createSttForwarder(protocol: SttProtocol, logger: Logger, options?: SttForwarderOptions): SttForwarder {
     switch (protocol) {
         case 'websocket':
-            return new WebSocketForwarder(logger);
+            return new WebSocketForwarder(logger, options);
         case 'tcp':
-            return new TcpForwarder(logger);
+            return new TcpForwarder(logger, options);
         case 'grpc':
-            return new GrpcForwarder(logger);
+            return new GrpcForwarder(logger, options);
         case 'mrcp': {
             const bridge = createMrcpBridge(logger);
             const fwd = new MrcpSttForwarder(logger, bridge);

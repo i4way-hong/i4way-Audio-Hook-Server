@@ -71,10 +71,18 @@ import { mkdir } from 'fs/promises';
 import { join } from 'path';
 import recordingConfig from '../utils/config';
 import sttConfig from '../utils/stt-config';
-import { createSttForwarder, SttForwarder } from './stt-forwarder';
+import { createSttForwarder, SttForwarder, SttForwarderMetadata, SttForwarderOptions } from './stt-forwarder';
 
 type StateToBooleanMap = {
     readonly [state in ServerSessionState]: boolean
+};
+
+const CONVERSATION_RECORDS_SYMBOL = Symbol.for('audiohook.conversationLookup.records');
+const CONVERSATION_ID_SYMBOL = Symbol.for('audiohook.conversationLookup.conversationId');
+
+type ConversationMetadataCarrier = {
+    [CONVERSATION_RECORDS_SYMBOL]?: unknown;
+    [CONVERSATION_ID_SYMBOL]?: unknown;
 };
 
 // Map that indicates whether errors are signaled to client in a state.
@@ -1049,6 +1057,32 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
         }
     }
 
+    private buildSttForwarderOptions(): SttForwarderOptions | undefined {
+        const carrier = this as unknown as ConversationMetadataCarrier;
+        const rawRecords = Reflect.get(carrier, CONVERSATION_RECORDS_SYMBOL);
+        const rawConversationId = Reflect.get(carrier, CONVERSATION_ID_SYMBOL);
+
+        const conversationId = typeof rawConversationId === 'string' && rawConversationId.length > 0
+            ? rawConversationId
+            : undefined;
+        const conversationRecords = Array.isArray(rawRecords) && rawRecords.length > 0
+            ? rawRecords as SttForwarderMetadata['conversationRecords']
+            : undefined;
+
+        if (!conversationId && (!conversationRecords || conversationRecords.length === 0)) {
+            return undefined;
+        }
+
+        const metadata: SttForwarderMetadata = {};
+        if (conversationId) {
+            metadata.conversationId = conversationId;
+        }
+        if (conversationRecords) {
+            metadata.conversationRecords = conversationRecords;
+        }
+        return { metadata };
+    }
+
     private async ensureSttForwarder(): Promise<void> {
         if (!sttConfig.enabled) {
             return;
@@ -1062,7 +1096,8 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
         }
         this.sttForwarderPromise = (async () => {
                 this.logger.debug(`Creating STT forwarder with protocol: ${sttConfig.protocol}`);
-            const fwd = createSttForwarder(sttConfig.protocol, this.logger);
+            const options = this.buildSttForwarderOptions();
+            const fwd = createSttForwarder(sttConfig.protocol, this.logger, options);
             await fwd.start();
             this.sttForwarder = fwd;
             return fwd;
@@ -1096,7 +1131,8 @@ class ServerSessionImpl extends EventEmitter implements ServerSession {
             this.sttForwarder = null;
         }
         if (!this.sttForwarder) {
-            const fwd = createSttForwarder(sttConfig.protocol, this.logger);
+            const options = this.buildSttForwarderOptions();
+            const fwd = createSttForwarder(sttConfig.protocol, this.logger, options);
             await fwd.start();
             this.sttForwarder = fwd;
         }

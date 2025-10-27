@@ -132,9 +132,7 @@ export const isBoolean = (value: JsonValue): value is boolean => (
 );
 
 export const isSequenceNumber = (value: JsonValue): value is SequenceNumber => (
-    // Note: we need the type assertion because isInteger() doesn't have a type guard (https://github.com/microsoft/TypeScript/issues/15048).
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    Number.isInteger(value) && (value! >= 0)
+    (typeof value === 'number') && Number.isInteger(value) && (value >= 0)
 );
 
 export const uuidRegex = /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000)$/;
@@ -228,8 +226,7 @@ export const isContinuedSessions = (value: JsonValue): value is ContinuedSession
 );
 
 export const isErrorCode = (value: JsonValue): value is number => (
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    (Number.isInteger(value) && ((value! >= 400) && (value! < 10000)))
+    (typeof value === 'number') && Number.isInteger(value) && (value >= 400) && (value < 10000)
 );
 
 export const isEventEntity = (value: JsonValue): value is EventEntity & JsonObject => {

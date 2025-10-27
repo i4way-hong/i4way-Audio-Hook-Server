@@ -8,6 +8,7 @@ import {
     ServerWebSocket,
     SupportedLanguages
 } from '../audiohook';
+import { registerConversationLookup } from './conversation-lookup';
 import { SocketStream } from '@fastify/websocket';
 
 const isLocal = process.env['NODE_ENV'] !== 'dev';
@@ -58,6 +59,8 @@ export const createAudioHookSession = ({ request, sessionLogLevel, supportedLang
         logger: request.server.log.child({ session: sessionId }, { level: sessionLogLevel ?? (isLocal ? 'debug' : 'info') }),
         supportedLanguages
     });
+
+    registerConversationLookup(session, { logger: session.logger });
 
     return { session, sessionId, correlationId, organizationId };
 };

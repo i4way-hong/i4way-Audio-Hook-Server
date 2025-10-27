@@ -3,7 +3,7 @@
 All notable changes for the MRCP sidecar reference implementation (Phase 1) are documented here.
 
 ## [Unreleased]
-- (placeholder)
+- Raised baseline runtime requirement to Node.js 22 / npm 10 and refreshed TypeScript + Jest toolchain.
 
 ## [0.1.0] - 2025-09-29 (Phase 1 Completion)
 ### Added

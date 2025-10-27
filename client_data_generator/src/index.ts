@@ -245,7 +245,8 @@ new Command()
                 mediaSource,
                 organizationId,
                 sessionId,
-                conversationId: connectionProbe ? '00000000-0000-0000-0000-000000000000' : uuid(),
+                //conversationId: connectionProbe ? '00000000-0000-0000-0000-000000000000' : uuid(),
+                conversationId: '2028ae52-115e-429c-a660-90b6dff13d93',
                 participant: connectionProbe ? {
                     id: '00000000-0000-0000-0000-000000000000',
                     ani: '',

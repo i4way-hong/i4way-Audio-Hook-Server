@@ -5,6 +5,7 @@ import { RecordedSession, RecordingBucket } from './recordedsession';
 import { initiateRequestAuthentication, verifyRequestSignature } from './authenticator';
 import { isUuid, httpsignature as httpsig, ServerSession, createServerSession } from '../audiohook';
 import { addAgentAssist } from './agentassist-hack';
+import { registerConversationLookup } from './conversation-lookup';
 import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
 
 dotenv.config();
@@ -108,6 +109,8 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
             });
         }
         
+        registerConversationLookup(session, { logger });
+
         if(!(request.authenticated ?? false)) {
             // Request has not yet been authenticated, attach authenticator(s) to verify request signature.
             initiateRequestAuthentication({ session, request });

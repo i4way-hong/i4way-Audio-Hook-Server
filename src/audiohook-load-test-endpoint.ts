@@ -8,6 +8,7 @@ import {
 } from '../audiohook';
 import { SessionWebsocketStatsTracker } from './session-websocket-stats-tracker';
 import { createTestStatusDataItem } from './datamodel-teststatus';
+import { registerConversationLookup } from './conversation-lookup';
 
 const timeProvider = defaultTimeProvider;
 
@@ -42,6 +43,8 @@ export const addAudiohookLoadTestRoute = (fastify: FastifyInstance, path: string
             logger,
             timeProvider
         });
+
+        registerConversationLookup(session, { logger });
 
         session.addOpenHandler(async ({ openParams }) => {
             const conversationId = openParams.conversationId;

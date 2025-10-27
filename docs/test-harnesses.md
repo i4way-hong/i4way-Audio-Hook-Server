@@ -2,6 +2,9 @@
 
 세 가지 테스트 서버 (WebSocket / TCP / gRPC) 모두 동일한 개념의 환경 변수, 로깅 포맷, 캡처 구조를 사용하도록 통합되었습니다.
 
+- 오디오 패킷을 일정 간격으로 집계해 JSON 요약을 생성하며, 설정된 `FORWARD_WS_URL` 로만 전송합니다. 기본 연결(WS/TCP/gRPC)에는 더 이상 요약 JSON 을 직접 보내지 않습니다.
+- `OUTBOUND_PACKET_INTERVAL` 과 `FORWARD_WS_MAX_QUEUE` 등 집계/전달 관련 환경 변수는 세 서버에서 동일한 의미로 동작합니다.
+
 ## 공통 환경 변수
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
@@ -15,7 +18,12 @@
 | CAPTURE_DIR | 캡처 파일 저장 디렉터리 | captures |
 | CAPTURE_WAV | 1/true 시 gRPC: 추가로 디코딩된 mono 16bit WAV 작성 (PCMU→L16) | 0 |
 | MESSAGE_INTERVAL_MS | 주기적 안내/echo 텍스트 송신 간격 (WS/TCP) | 3000 |
+| ANNOUNCEMENT_TEXT | TCP 하네스 안내 문구 템플릿 (`{time}`, `{sentence}` 치환; 빈 문자열이면 비활성) | 기본 안내문 |
 | ECHO_TEXT | 설정 시 partial/주기/환영 메시지 모두 고정 텍스트 사용 | (없음) |
+| CONVERSATION_LOOKUP_URL | 대화 메타데이터 조회 REST 엔드포인트 (미설정 시 비활성) | (없음) |
+| CONVERSATION_LOOKUP_QUERY_PARAM | 대화 ID 쿼리 파라미터 이름 | conversation_id |
+| CONVERSATION_LOOKUP_TIMEOUT_MS | 외부 조회 HTTP 타임아웃(ms) | 3000 |
+| CONVERSATION_LOOKUP_CACHE_SECONDS | 동일 conversation 응답 캐시 유지 시간(s) | 30 |
 | TRANSCRIPT_INTERVAL | gRPC partial transcript N 마다 생성 | 12 |
 | FINAL_DELAY_MS | gRPC final transcript 지연 | 250 |
 | BACKPRESSURE_ENABLED | gRPC 테스트 서버: 내부 큐 지연 시뮬레이션 | 0 |
