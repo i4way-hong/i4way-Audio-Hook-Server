@@ -1,112 +1,134 @@
 # AudioHook Reference Implementation
 
-## Prerequisites
-- Node.js 22.0.0 이상
-- npm 10 이상
+Fastify 기반 AudioHook 샘플 서버와 STT(음성 인식) 포워딩, UniMRCP 사이드카 통합을 실험할 수 있는 레퍼런스 프로젝트입니다. AudioHook 프로토콜의 서버/클라이언트 구현, 테스트 하니스, 그리고 운영 환경에서 바로 적용 가능한 로깅·측정 구성을 포함합니다.
 
-# Audiohook Sidecar - UniMRCP Integration Guide
+> **목표**: “AudioHook 서버를 바로 띄우고, 외부 STT 서비스나 UniMRCP 엔진과 빠르게 연동/검증할 수 있는 단일 레포지터리”
 
-## 네이티브 UniMRCP SDK 연동 빌드
+---
 
-Windows PowerShell
+## ✨ 주요 특징
 
-```
-$env:GYP_DEFINES='use_unimrcp_sdk=1'
-$env:UNIMRCP_SDK_DIR='C:\unimrcp\sdk'
-$env:APR_DIR='C:\unimrcp\deps\apr'
-$env:SOFIA_DIR='C:\unimrcp\deps\sofia'
-npm run build:native
-```
+- Fastify + WebSocket 기반 AudioHook 서버 (`src/`)
+- AudioHook 코어 라이브러리(`audiohook/`)와 HTTP signatures, VAD, 파일 기록 등 재사용 가능한 모듈
+- STT 포워딩(WebSocket/TCP/gRPC/MRCP) 및 대화 메타데이터 조회 파이프라인
+- 가벼운 STT 테스트 하니스(WS/TCP/gRPC)와 클라이언트 데이터 생성 도구
+- UniMRCP 사이드카 빌드 및 telemetry 수집, Prometheus 노출
+- 풍부한 환경 변수/문서화: `docs/*.md`, `.env` 기반 구성, 로깅/측정 템플릿
 
-Linux/macOS
+---
 
-```
-export GYP_DEFINES='use_unimrcp_sdk=1'
-export UNIMRCP_SDK_DIR=/opt/unimrcp
-export APR_DIR=/opt/apr
-export SOFIA_DIR=/opt/sofia-sip
-npm run build:native
-```
+## 📁 저장소 구조 개요
 
-## 런타임 설정
-- MRCP_RTP_PORT_MIN/MRCP_RTP_PORT_MAX: 로컬 RTP 포트 범위
-- MRCP_SIDECAR_SIGNALING=module, MRCP_SIDECAR_SIGNALING_MODULE=./audiohook/src/sidecar/signaling/unimrcp-signaling
- - MRCP_ENABLE_RTP_LISTEN=1 : 세션 당 임의 UDP 포트 바인드하여 수신 RTP 헤더 패킷 카운트 (관측/테스트 용)
- - MRCP_ENABLE_SIP_V2=1 : SIP UDP 1단계 스켈레톤 활성화 (INVITE 재전송 + 200 OK SDP 파싱)
- - (테스트) MRCP_TEST_ALLOW_LOW_TIMEOUT=1 : SIP 타이머 하한(2*T1) 검증 우회 (Jest 가속 전용)
+| 경로 | 설명 |
+|------|------|
+| `src/` | Fastify 앱 레이어. WS 엔드포인트, 플러그인(DynamoDB, Secrets), 서비스 라이프사이클 관리. |
+| `audiohook/` | AudioHook 코어(프로토콜, 서버/클라이언트 세션, 오디오 유틸, STT 포워더 등). |
+| `stt_websocket_test/`, `stt_tcp_test/`, `stt_grpc_test/` | 각 프로토콜별 STT 서버 하니스. 최근 메타데이터 로깅/미리보기 기능이 추가됨. |
+| `client_data_generator/` | 대량 세션/오디오 생성기. WAV 재생, 텍스트 스트림 출력을 시뮬레이션. |
+| `configs/` | UniMRCP 및 기타 외부 서비스 예시 설정. |
+| `docs/` | 환경 변수, Telemetry, SIP 로드맵 등 심화 문서. |
+| `scripts/` | RTP 패킷 송출 등 보조 스크립트. |
+| `recordings/`, `logs/` | 기본 출력 디렉터리(WAV 녹음, 회전 로그). |
 
-### SIP / RTP / Telemetry 관련 핵심 환경변수 (요약)
-| 변수 | 설명 | 타입/범위 | 비고 |
-|------|------|-----------|------|
-| MRCP_SIP_T1_MS | SIP Timer T1 (기본 500) | 100~5000 (테스트 최소 제한: 테스트 플래그 없으면 200 이상) | 재전송 초기 간격 |
-| MRCP_SIP_T2_MS | SIP Timer T2 (기본 4000) | >= T1 | 재전송 간격 상한 |
-| MRCP_SIP_INVITE_MAX_RETRANS | 재전송 최대 횟수 | 1~10 | RFC 3261 권장 7 |
-| MRCP_SIP_CODEC_LIST | Offer 코덱 CSV | 예: PCMU,PCMA,L16 | 순서=우선도 |
-| MRCP_ENABLE_RTP_LISTEN | RTP 관측 | 0/1 | rtpPacketsReceived 노출 |
-| MRCP_ENABLE_SIP_V2 | SIP UDP 활성 | 0/1 | 비활성 시 RTSP 경로 우선 |
-| MRCP_TEST_ALLOW_LOW_TIMEOUT | 낮은 타이머 허용 | 0/1 (test) | 프로덕션 금지 |
+추가적으로 `audiohook-sample-server-1.0.2.tgz` 는 AudioHook 코어 패키지의 프리빌드 번들입니다.
 
-### 테스트 전용 네트워크 시뮬레이터 (재정리)
-| 변수 | 의미 | 기본 | 노트 |
-|------|------|------|------|
-| MRCP_SIP_TEST_PACKET_DROP_RATE | 1차 또는 persistent 모든 시도 드롭 확률 | 0 | 0.0~1.0 |
-| MRCP_SIP_TEST_PACKET_DELAY_MS | 고정 지연 ms | 0 | 지연 + jitter 합산 적용 |
-| MRCP_SIP_TEST_PACKET_JITTER_MS | +/- 지터 범위 | 0 | Uniform [-j,+j] |
-| MRCP_SIP_TEST_SEED | RNG 시드 | 시간 기반 | 동일 시 재현성 |
-| MRCP_SIP_TEST_PERSISTENT_DROP | 재전송에도 확률 적용 | 0 | 1 설정시 모든 attempt 대상 |
-| MRCP_SIP_TEST_LOG | 결정 로그 출력 | 0 | 단위/통합 테스트 디버그 |
+---
 
-위 표는 `docs/telemetry.md` 와 동기화되어야 하며, 값/명칭 변경 시 CHANGELOG 업데이트를 수행합니다.
+## 🛠 사전 준비
 
-## 프로파일 매핑
-- ah-mrcpv1: RTSP(MRCPv1)
-- ah-mrcpv2: SIP(MRCPv2)
+- Node.js **22.x 이상**
+- npm **10 이상**
+- (옵션) UniMRCP SDK 및 의존성(APR, Sofia-SIP) – 사이드카 네이티브 빌드 시 필요
 
-## RTP ptime 협상
-- SDP a=ptime을 파싱해 합의된 ptime을 사용합니다.
+---
 
-## CI 빌드
-- .github/workflows/native.yml 참조(Windows/Ubuntu에서 SDK 유무에 따라 조건부 빌드)
+## 🚀 빠른 시작
 
-## STT 포워더 설정 가이드
+1. 의존성 설치
 
-환경 변수 키(.env)
-- STT_ENABLED=true|false
-- STT_PROTOCOL=websocket|tcp|grpc|mrcp
-- STT_ENDPOINT=ws://host:port 또는 127.0.0.1:9000, tcp://host:port, [ipv6]:port
-- STT_API_KEY=베어러 토큰(옵션, WebSocket)
-- STT_HEADERS={"X-Custom":"v"} (옵션, WebSocket, JSON)
-- STT_ENCODING=L16|PCMU
-- STT_RATE=8000|16000|44100|48000
-- STT_MONO=true|false (true면 0번 채널만 전송)
-- STT_RESAMPLE_ENABLED=true|false (샘플레이트 미스매치 시 자동 변환)
+   ```powershell
+   npm install
+   ```
 
-WebSocket 전용
-- STT_WS_INIT_JSON={"type":"init","sampleRate":8000} (연결 직후 송신)
-- STT_WS_PING_SEC=30 (0/음수/NaN이면 비활성화)
-- STT_WS_BYE_JSON={"type":"bye"} (종료 시 송신)
-- STT_WS_LOG_ASCII=1 (옵션) 수신 텍스트 로그의 비ASCII 문자를 \uXXXX로 이스케이프
+2. 환경 변수 구성: `.env` 파일을 생성하거나 쉘 환경에서 직접 설정합니다. 기본값과 상세 설명은 [환경 변수](#환경-변수-요약)를 참고하세요.
 
-TCP 전용
-- STT_TCP_FRAMING=raw|len32|newline
-- STT_TCP_INIT_HEX=0a0b0c (연결 직후 송신할 HEX)
-- STT_TCP_BYE_HEX=ff00 (종료 시 송신할 HEX)
+3. 개발 서버 실행
 
-### 수신 로그 미리보기
-- WebSocket
-  - 텍스트: `STT WS recv text: <앞 200자 미리보기>`
-  - 바이너리: `STT WS recv binary (<N> bytes)`
-- TCP
-  - 프레이밍 len32/newline을 파싱해 텍스트 미리보기 로깅: `STT TCP recv text: <앞 200자>`
-  - raw 모드는 청크 단위로 UTF-8 디코드해 미리보기 로깅
+   ```powershell
+   npm start
+   ```
 
-### 핸드셰이크 프로파일 예시
-- WebSocket: INIT(JSON) → 바이너리 오디오 → BYE(JSON)
-- TCP len32: INIT(hex) → len32BE 길이프리픽스 프레임 → BYE(hex)
-- TCP newline: 프레임 뒤에 \n 추가
+   기본적으로 `127.0.0.1:3000`에서 AudioHook WebSocket 엔드포인트(`/api/v1/audiohook/ws`, `/api/v1/voicetranscription/ws`, `/api/v1/loadtest/ws`)가 올라옵니다.
 
-### 샘플 .env
-```
+---
+
+## ⚙️ 스크립트 모음
+
+| 명령 | 설명 |
+|-------|------|
+| `npm run setup` | 프로젝트 의존성 설치. |
+| `npm start` | Fastify 서버 실행. |
+| `npm test` | Jest 테스트. (필요 시 `test:jest` VS Code 작업 사용 가능) |
+| `npm run build` | TypeScript 컴파일 + ESLint. |
+| `npm run buildcheck` | 타입체크(emit 없음) + ESLint. |
+| `npm run sidecar` | UniMRCP 사이드카 서버 실행. |
+| `npm run sidecar:mock` | MRCP 사이드카 모의 서버. |
+| `npm run start:grpc-test` | gRPC STT 하니스 가동(`stt_grpc_test/`). |
+| `npm run send:rtp` | `scripts/send_rtp_pcmu_example.ts` 실행, RTP 송신 예제. |
+
+---
+
+## 🌐 환경 변수 요약
+
+아래는 자주 사용하는 항목만 발췌한 것입니다. 전체 목록과 세부 설명은 `docs/env.md`, `docs/telemetry.md`를 참고하세요.
+
+### 애플리케이션 & 로깅
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `LOG_LEVEL` | dev=`debug`, prod=`info` | 로깅 레벨. |
+| `LOG_DIR` | `./logs` | 로그 파일 위치. |
+| `LOG_PREFIX` | `app` | 회전 로그 파일 접두사. |
+| `LOG_MAX_MB` | `50` | 로그 파일 최대 크기(MB). |
+| `LOG_RETENTION_DAYS` | `7` | 로그 보존 일수. |
+| `SERVERPORT` / `SERVERHOST` | `3000` / `127.0.0.1` | Fastify 서버 바인딩. |
+
+개발 모드에서는 콘솔에 `pino-pretty` 포맷을, 운영 모드에서는 JSON 라인을 출력합니다. 모든 모드에서 회전 파일이 함께 기록됩니다.
+
+### STT 포워딩
+
+| 변수 | 값 예시 | 설명 |
+|------|---------|------|
+| `STT_ENABLED` | `true`/`false` | 외부 STT 포워딩 활성화. |
+| `STT_PROTOCOL` | `websocket` \| `tcp` \| `grpc` \| `mrcp` | 포워딩 프로토콜 선택. |
+| `STT_ENDPOINT` | `ws://host:port/path` 등 | 대상 엔드포인트. |
+| `STT_ENCODING` | `L16` \| `PCMU` | 오디오 인코딩. |
+| `STT_RATE` | `8000`, `16000`, ... | 샘플레이트. |
+| `STT_MONO` | `true`/`false` | 모노 전송 여부. |
+| `STT_RESAMPLE_ENABLED` | `true`/`false` | 샘플레이트 자동 변환. |
+
+**WebSocket 전용**
+
+- `STT_WS_INIT_JSON`, `STT_WS_BYE_JSON`: 연결 직후/종료 전 전송할 JSON 메시지.
+- `STT_WS_PING_SEC`: 주기 핑(초, 0/음수면 비활성화).
+- `STT_WS_LOG_ASCII`: 수신 텍스트 로그에서 비ASCII 문자 이스케이프.
+
+**TCP 전용**
+
+- `STT_TCP_FRAMING`: `raw` \| `len32` \| `newline` 프레이밍 모드.
+- `STT_TCP_INIT_HEX`, `STT_TCP_BYE_HEX`: 연결 직후/종료 전 헥스 페이로드.
+
+**대화 메타데이터 조회**
+
+- `CONVERSATION_LOOKUP_URL`: 세션이 열릴 때 외부 API 호출로 메타데이터 조회.
+- `CONVERSATION_LOOKUP_QUERY_PARAM`: 조회 시 사용할 쿼리 파라미터명.
+- `CONVERSATION_LOOKUP_TIMEOUT_MS`, `CONVERSATION_LOOKUP_CACHE_SECONDS`: 호출 타임아웃과 캐시 TTL.
+
+조회된 메타데이터는 WebSocket/TCP/gRPC 포워더에 자동 병합되어, STT 하니스가 동일한 conversation 정보를 수신할 수 있습니다.
+
+### 샘플 `.env`
+
+```ini
 STT_ENABLED=true
 STT_PROTOCOL=websocket
 STT_ENDPOINT=ws://localhost:8080/stt
@@ -117,7 +139,6 @@ STT_RESAMPLE_ENABLED=false
 STT_WS_INIT_JSON={"type":"init","sampleRate":8000}
 STT_WS_PING_SEC=30
 STT_WS_BYE_JSON={"type":"bye"}
-# 콘솔 인코딩 문제 회피용(옵션)
 # STT_WS_LOG_ASCII=1
 
 # TCP 예시
@@ -128,69 +149,57 @@ STT_WS_BYE_JSON={"type":"bye"}
 # STT_TCP_BYE_HEX=ff
 ```
 
-### 대화 조회 메타데이터 전파
-- `CONVERSATION_LOOKUP_URL=https://lookup.example.com/session` : 통화/세션 메타데이터를 조회할 외부 HTTP(S) 엔드포인트. 비워두면 기능 비활성화.
-- `CONVERSATION_LOOKUP_QUERY_PARAM=conversation_id` : 조회 시 사용할 쿼리 파라미터명.
-- `CONVERSATION_LOOKUP_TIMEOUT_MS=3000` : HTTP 요청 타임아웃(ms).
-- `CONVERSATION_LOOKUP_CACHE_SECONDS=30` : 동일 ID 재조회 캐시 TTL(초).
+---
 
-세션이 `open`될 때 `conversationId`가 존재하면 위 설정을 이용해 메타데이터를 조회 후 세션 객체에 저장합니다. STT 포워더 생성 시 자동으로 아래와 같이 전파됩니다.
+## 🧪 STT 테스트 하니스
 
-- WebSocket: INIT JSON이 객체 형태면 해당 필드에 병합되고, 아닐 경우 별도의 `conversationMetadata` 메시지를 추가로 송신합니다.
-- TCP: 연결 직후 프레이밍 규칙(len32/raw/newline)에 맞춰 `{"type":"conversationMetadata", ...}` JSON을 추가로 송신합니다.
-- gRPC: `SessionInit.tags`에 낙타/스네이크 케이스 키를 문자열로 플랫팅해 포함하고, 원본 JSON은 `vendor_params.conversation_metadata` 및 `conversation_lookup` 키로 전달됩니다.
+프로덕션 STT 서비스 없이도 AudioHook 포워더를 검증할 수 있는 경량 서버들입니다.
 
-조회 결과가 없거나 기능이 비활성화된 경우 기존 동작과 동일하게 INIT/오디오만 송신합니다.
+### WebSocket (`stt_websocket_test/server.js`)
 
-## 로깅 요약
-- 개발 모드(NODE_ENV != production)
-  - 콘솔: 사람이 읽기 쉬운 pretty 형식(pino-pretty)
-  - 파일: JSON 라인, 날짜/크기 기반 회전 및 보존 적용
-- 운영 모드(NODE_ENV = production)
-  - 콘솔/파일: JSON 라인, 파일은 회전/보존 적용
-- 파일명 규칙: `logs/<prefix>-YYYY-MM-DD[-N].log` (기본 prefix=app)
+```powershell
+cd stt_websocket_test
+npm install --no-audit --no-fund
+npm start
+```
 
-## 테스트 서버
-- Client Data 생성기 `client_data_generator/client_data_generator/run_client.cmd`
-  - 음성 데이터 생성기
-  - 로컬 wav 파일을 재생하려면 아래와 같이 cmd 파일 수정
-    --> npm start -- --uri wss://audiohook.i4way.co.kr/api/v1/audiohook/ws --api-key R2VuZXN5c2Nsb3Vk --client-secret YTEyMzQ1Njc4OQ== 
-    --wavfile C:\cti\001-ed_sheeran_-_shape_of_you.wav
+- 환경 변수: `PORT`(또는 `STT_TEST_PORT`), `WS_PATH`(기본 `/stt`)
+- 기능: 텍스트/바이너리 수신 로그, INIT/BYE 처리, 3초마다 한글 텍스트 전송, 메타데이터 미리보기
 
-  ### 클라이언트 실행 옵션 요약 (index.ts)
-  - [serveruri] 또는 --uri <uri>: AudioHook 서버 WS/WSS URI
-  - wavfile <path>: 전송할 WAV 파일 경로(미지정 시 톤 발생기 사용)
-  - api-key <apikey>: API Key (Base64-url 세트 형식)
-  - client-secret <base64>: 메시지 서명용 클라이언트 시크릿(Base64)
-  - custom-config <json>: open 메시지의 customConfig로 전달할 JSON 문자열
-  - language <code>: 테스트에 사용할 언어 코드
-  - supported-languages: 서버의 지원 언어 목록 조회
-  - session-count <n>: 동시 세션 수 (기본 1, 1~1024)
-  - max-stream-duration <sec|ptxs>: 오디오 전송 최대 지속시간(초 또는 ISO-8601 PTxS)</sec|ptxs>
-  - connection-probe: 프로브만 수행(오디오는 max-stream-duration 지정 시에만 송신). --wavfile와 동시 사용 불가
-  - orgid <uuid>: 조직(테넌트) ID UUID (미지정 시 랜덤 생성)
-  - connection-rate <rps>: 초당 세션 생성 평균 속도(기본 50, 0.1~10000)
-  - session-log-level <level>: 세션 로그 레벨(fatal|error|warn|info|debug|trace, 기본 info)
-  - wavfile 미지정 시 톤 소스 사용.
-  - connection-probe와 --wavfile은 상호 배타.
+### TCP (`stt_tcp_test/server.js`)
 
-  ### WebSocket 테스트: `stt_websocket_test/server.js`
-  - Env: PORT(또는 STT_TEST_PORT), WS_PATH(기본 /stt)
-  - 기능: 텍스트/바이너리 수신 로그, INIT/bye 처리, 3초마다 한글 텍스트 송신
-  
-  ### TCP 테스트: `stt_tcp_test/server.js`
-  - Env: PORT(또는 STT_TEST_TCP_PORT), TCP_FRAMING(raw|len32|newline), INIT_HEX, BYE_HEX
-  - 기능: 프레이밍별 수신/송신, 3초마다 한글 텍스트 송신
+```powershell
+cd stt_tcp_test
+npm install --no-audit --no-fund
+npm start
+```
 
-## 추가 문서
-* `docs/telemetry.md` - MRCP 세션 Telemetry 필드 정의 및 사용 예시
-* `docs/env.md` - MRCP/STT 관련 환경 변수 목록 및 튜닝 가이드
-* `docs/status-2025-09-26.md` - 최근 EOD 진행 상황 요약
+- 환경 변수: `PORT`(또는 `STT_TEST_TCP_PORT`), `TCP_FRAMING`, `INIT_HEX`, `BYE_HEX`
+- 기능: 프레이밍(raw/newline/len32) 처리, 수신 텍스트 미리보기, 3초 주기 메시지
 
-## Metrics (Prometheus)
-Sidecar HTTP 서버(/metrics 경로)에서 세션별 telemetry 누산 결과를 노출합니다.
+### gRPC (`stt_grpc_test/server.js`)
 
-예시 응답:
+```powershell
+npm run start:grpc-test
+```
+
+- AudioHook의 gRPC 스트리밍 프로토콜을 모사합니다.
+- 최근 업데이트로 `conversation_id`를 포함한 메타데이터 필드가 전파됩니다.
+
+### Client Data Generator (`client_data_generator/`)
+
+대량 세션 부하 테스트나 WAV 전송을 시뮬레이션 할 수 있습니다. `run_client.cmd`를 수정하여 서버 URI, API 키, WAV 파일 등을 지정하세요. 세부 옵션은 `client_data_generator/README.md`와 `client_data_generator/src/index.ts`에 정리되어 있습니다.
+
+---
+
+## 📡 로깅 & Telemetry
+
+- `pino` 멀티 타깃을 이용해 콘솔 + 파일(JSON) 로그를 동시에 남깁니다.
+- `logs/<prefix>-YYYY-MM-DD[-N].log` 형식으로 날짜/사이즈 기반 회전.
+- Telemetry 누산 결과는 사이드카 HTTP 서버 `/metrics` 엔드포인트에서 Prometheus 포맷으로 노출됩니다.
+
+예시:
+
 ```
 # HELP mrcp_sessions Current sessions registered
 # TYPE mrcp_sessions counter
@@ -198,138 +207,96 @@ mrcp_sessions 1
 # HELP mrcp_sip_attempts_total Total SIP attempts
 # TYPE mrcp_sip_attempts_total counter
 mrcp_sip_attempts_total 2
-# HELP mrcp_rtp_packets_received_total Total RTP packets observed (receive or send proxy)
-# TYPE mrcp_rtp_packets_received_total counter
-mrcp_rtp_packets_received_total 15
 ```
-
-활용 방법:
-1. `curl http://127.0.0.1:<sidecar-port>/metrics`
-2. Prometheus `scrape_config`에 대상 추가
-3. Grafana 대시보드에 카운터 그래프 구성 (rate() 함수 활용)
-
-## RTP Listen 옵션
-`MRCP_ENABLE_RTP_LISTEN=1` 설정 시 세션 생성 시 부가 UDP 소켓을 임의 포트에 바인드해 수신 RTP 헤더(V=2) 패킷을 감지하고 `rtpPacketsReceived` 카운터를 증가시킵니다.
-
-주의:
-- 실제 RTP 스트림을 미러링하거나 termination 하지 않음 (관측 목적)
-- 많은 트래픽 환경에서는 소켓 처리 비용 증가 가능
-
-## SIP UDP (Experimental)
-`MRCP_ENABLE_SIP_V2=1` 활성화 시 순서:
-1. UDP INVITE 전송 (지수 백오프 재전송, 기본 5회)
-2. 200 OK SDP 수신 시 ACK (best-effort) → 세션 transport=sip
-3. 실패 시 TCP INVITE 재시도 (기존 skeleton)
-4. 다시 실패 시 RTSP → 최종 실패 시 fallback 5004 (비활성화 가능)
-
-제한:
-- 인증, CANCEL, 재등록, Dialog state machine 없음
-- Provisional (100/180) 단순 무시 (200 OK 필요)
-- 추후 telemetry v2 에서 UDP/TCP 분리 카운터 예정
-
-환경 변수 조합 예시 (PowerShell):
-```powershell
-$env:MRCP_ENABLE_SIP_V2=1
-$env:MRCP_ENABLE_RTP_LISTEN=1
- # 네트워크 시뮬레이터(테스트용)
- $env:MRCP_SIP_TEST_PACKET_DROP_RATE=0.3
- $env:MRCP_SIP_TEST_PACKET_DELAY_MS=120
- $env:MRCP_SIP_TEST_PACKET_JITTER_MS=40
- $env:MRCP_SIP_TEST_SEED=12345
- $env:MRCP_SIP_TEST_LOG=1
-```
-
-## 빠른 시나리오 예시
-1. UDP SIP 서버(or mock) 준비 (200 OK with SDP 반환)
-2. Sidecar 실행 후 `/metrics` 로 sipAttempts 증가 확인
-3. RTP 패킷 몇 개 전송 → `mrcp_rtp_packets_received_total` 증가 관측
-
-## Real UniMRCP Integration (RTSP v1)
-
-다음 절차로 실제 UniMRCP RTSP 서버와 세션 협상을 검증할 수 있습니다.
-
-### 1. UniMRCP 서버 준비
-로컬 또는 컨테이너로 UniMRCP 서버를 실행하고 다음을 확인:
-* RTSP 제어 포트: 8060/TCP (기본)
-* RTP 포트 범위: 예) 40000-40050/UDP (서버 설정과 sidecar 환경변수 일치 필요)
-* 서버 설정 예시는 `configs/unimrcp/` 참고
-
-### 2. Sidecar 환경 변수
-PowerShell 예시:
-```
-$env:STT_PROTOCOL = 'mrcp'
-$env:STT_ENDPOINT = 'rtsp://127.0.0.1:8060/unimrcp'
-$env:MRCP_FORCE_RTSP = '1'        # (SIP 스켈레톤 우회)
-$env:MRCP_RTP_PORT_MIN = '41000'
-$env:MRCP_RTP_PORT_MAX = '41020'
-# 선택: 재시도/타임아웃 튜닝
-# $env:MRCP_RTSP_DESCRIBE_RETRIES = '2'
-# $env:MRCP_RTSP_SETUP_RETRIES    = '1'
-```
-
-실행:
-```
-npm run sidecar
-```
-
-### 3. 세션 열기 (간단 스니펫)
-```ts
-import { openSession } from './audiohook/src/sidecar/signaling/unimrcp-signaling';
-
-(async () => {
-  const session = await openSession({ endpoint: process.env.STT_ENDPOINT! });
-  console.log('telemetry', session.getTelemetry());
-  console.log('remoteRtpPort', session.remotePort);
-})();
-```
-
-### 4. Telemetry 확인 포인트
-* describeAttempts / setupAttempts == 1 (정상 협상)
-* fallback5004Count == 0
-* transport == 'rtsp'
-* lastErrorCode 없음
-
-### 5. 문제 해결 (Troubleshooting)
-| 증상 | 원인 | 조치 |
-|------|------|------|
-| ECONNREFUSED 8060 | 서버 미기동/방화벽 | 서버 실행 및 포트 허용 |
-| DESCRIBE 실패 반복 | 서버 설정/리소스 경로 불일치 | endpoint path (`/unimrcp`) 확인 |
-| SETUP 500 | RTP 범위 충돌/플러그인 오류 | 서버 로그 확인, RTP 범위 조정 |
-| fallback5004Count=1 | 모든 협상 실패 | 네트워크/포트/환경변수 재검증 |
-
-### 6. RTP 송출(추가 구현 필요)
-현재 리포는 RTP 미디어 패킷 송신/RECOGNIZE 명령 전체 구현은 최소화되어 있으므로 실제 음성 인식까지 검증하려면:
-1. SDP에서 remote audio m= 줄의 포트 추출
-2. PCMU(또는 L16) 패킷 20ms 간격 송신 (dgram/UDP)
-3. MRCP RECOGNIZE 메시지 전송 로직 추가 (Channel-Identifier, Content-Type 세팅)
-4. 이벤트(RECOGNITION-COMPLETE) 파싱
-
-### 7. 향후 확장 (SIP v2)
-`sip-v2.ts` 는 간소화된 TCP INVITE 스켈레톤입니다. 실제 SIP/UDP 트랜잭션 지원이 필요하면:
-1. UDP 소켓 생성 + INVITE (Via/From/To/Call-ID/CSeq) 빌드
-2. 100 Trying, 180 Ringing, 200 OK 처리
-3. ACK 전송 후 SDP 기반 RTP 동일 처리
-4. 재전송/분기 타이머(T1/T2) 적용
-
-로드맵 초안은 별도 `docs/sip-roadmap.md` 로 이어질 수 있습니다.
-
-### 9. 테스트 전용 네트워크 시뮬레이터 변수
-신뢰성 하네스(sip-udp-reliability-harness.test.ts) 및 수동 실험용. 프로덕션에서 사용하지 마세요.
-
-| 변수 | 의미 | 범위/예시 |
-|------|------|-----------|
-| MRCP_SIP_TEST_PACKET_DROP_RATE | 1차(또는 persistent 모드 모든 시도) 전송 드롭 확률 | 0.0~1.0 |
-| MRCP_SIP_TEST_PACKET_DELAY_MS | 고정 지연(ms) | 0~5000 (테스트) |
-| MRCP_SIP_TEST_PACKET_JITTER_MS | +/- 지터 폭(ms) | 0~2000 |
-| MRCP_SIP_TEST_SEED | 시드 RNG | 정수 |
-| MRCP_SIP_TEST_PERSISTENT_DROP | '1'이면 재전송 시도에도 확률적 드롭 계속 적용 | 0/1 |
-| MRCP_SIP_TEST_LOG | '1'이면 drop/delay 결정 로그 출력 | 0/1 |
-
-Telemetry 연계: 드롭/지연 시뮬레이션은 SIP 자체 코드 변경 없이 `sip-udp.ts` 송신 시 network-sim 을 경유하여 적용됨. 실패 케이스는 `inviteTimeouts` 카운터에 반영.
-
-### 8. Fallback 비활성화(선택 개선)
-현재 5004 fallback 은 협상 완전 실패 시 telemetry 관찰용입니다. 운영 환경에서 원치 않으면 코드 내 fallback 조건에 환경 변수 가드를 추가할 수 있습니다 (예: `MRCP_DISABLE_FALLBACK5004`).
 
 ---
-추가 확장이 필요하면 README 하단에 항목을 증설하거나 전용 문서를 생성하는 것을 권장합니다.
+
+## 🎯 UniMRCP 사이드카 (고급)
+
+AudioHook 서버에서 외부 UniMRCP 엔진과 협상을 수행할 수 있도록 사이드카 모듈을 제공합니다. SDK와 네이티브 확장을 준비한 뒤 빌드/실행하세요.
+
+### 네이티브 빌드
+
+**Windows PowerShell**
+
+```powershell
+$env:GYP_DEFINES='use_unimrcp_sdk=1'
+$env:UNIMRCP_SDK_DIR='C:\unimrcp\sdk'
+$env:APR_DIR='C:\unimrcp\deps\apr'
+$env:SOFIA_DIR='C:\unimrcp\deps\sofia'
+npm run build:native
+```
+
+**Linux/macOS**
+
+```bash
+export GYP_DEFINES='use_unimrcp_sdk=1'
+export UNIMRCP_SDK_DIR=/opt/unimrcp
+export APR_DIR=/opt/apr
+export SOFIA_DIR=/opt/sofia-sip
+npm run build:native
+```
+
+### 런타임 핵심 변수
+
+- `MRCP_SIDECAR_SIGNALING=module`
+- `MRCP_SIDECAR_SIGNALING_MODULE=./audiohook/src/sidecar/signaling/unimrcp-signaling`
+- `MRCP_RTP_PORT_MIN`, `MRCP_RTP_PORT_MAX`: RTP 포트 범위
+- `MRCP_ENABLE_RTP_LISTEN`: RTP 관측용 보조 소켓 활성화
+- `MRCP_ENABLE_SIP_V2`: SIP UDP 스켈레톤 활성화
+- `MRCP_TEST_ALLOW_LOW_TIMEOUT`: SIP 타이머 하한 우회(테스트 전용)
+
+SIP/RTP/Telemetry 관련 환경 변수 표와 테스트용 네트워크 시뮬레이터 옵션은 `docs/telemetry.md`, `docs/mrcp-bridge-api.md`와 동기화되어야 합니다.
+
+### 빠른 시나리오
+
+1. UniMRCP 서버를 준비하고 포트를 확인합니다 (`configs/unimrcp/` 참고).
+2. 사이드카 실행:
+
+   ```powershell
+   npm run sidecar
+   ```
+
+3. 세션 오픈 스니펫:
+
+   ```ts
+   import { openSession } from './audiohook/src/sidecar/signaling/unimrcp-signaling';
+
+   (async () => {
+     const session = await openSession({ endpoint: process.env.STT_ENDPOINT! });
+     console.log('telemetry', session.getTelemetry());
+   })();
+   ```
+
+4. Telemetry로 describe/setup 시도, fallback5004 카운터 등을 확인하며 튜닝합니다.
+
+문제 해결, RTP 송출, SIP UDP 확장 관련 추가 팁은 기존 README 내용과 동일하게 아래 문서에서 다룹니다.
+
+---
+
+## ✅ 테스트 & 품질 점검
+
+- **유닛 테스트**: `npm test`
+- **타입 체크**: `npm run buildcheck` (tsc noEmit + ESLint)
+- **로그 확인**: 개발 모드에서 콘솔 pretty 로그 + `logs/` 파일을 함께 확인하세요.
+
+CI 파이프라인 예시는 `.github/workflows/native.yml`을 참고하세요.
+
+---
+
+## 📚 참고 문서
+
+- `docs/env.md` – 환경 변수 튜닝 가이드
+- `docs/telemetry.md` – MRCP Telemetry 항목 및 Prometheus 연계
+- `docs/mrcp-bridge-api.md`, `docs/mrcp-bridge-umc.md` – MRCP 연동 상세
+- `docs/sip-roadmap.md` – SIP 확장 로드맵
+- `docs/status-2025-09-26.md` – 최근 진행 상황 요약
+
+추가 안내나 기능 확장이 필요하면 이 README나 개별 문서를 업데이트해 주세요.
+
+---
+
+## 🤝 기여 & 지원
+
+이 레포지터리는 AudioHook 통합을 빠르게 실험하고 학습할 수 있도록 설계되었습니다. 개선 아이디어나 버그 리포트는 이슈/PR 형태로 공유해주세요. 운영 환경으로 이관할 때는 로그/보안/네트워크 정책을 조직 표준에 맞춰 조정하는 것을 권장합니다.
 
