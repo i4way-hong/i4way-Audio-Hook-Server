@@ -4,17 +4,26 @@ AudioHook을 운영 환경에 배포하기 위한 대표 시나리오(리눅스 
 
 ---
 
-## 1. 공통 준비 사항
+# AudioHook 배포 가이드
 
-- **런타임**: Node.js 22.x, npm 10.x 이상, Git
-- **환경 변수**: `.env.example`를 복사해 서비스별 값 설정 (`CONVERSATION_LOOKUP_*`, STT 자격 증명 등)
-- **보안**: TLS 인증서, 방화벽 규칙, API 키 저장소(Secrets Manager, Vault 등)
-- **저장소**: 로컬 디스크/NFS/S3 등 녹취 파일 보존 위치 확정
-- **모니터링**: Prometheus/CloudWatch, 로그 수집기(ELK, OpenSearch 등) 준비
+본 문서는 두 가지 운영 시나리오에 맞춰 AudioHook 배포 절차를 정리합니다.
+- 리눅스 2노드 + 로드밸런싱(물리/VM 운영)
+- Docker 기반 배포( Rocky Linux 9.5: Docker 설치 → 앱 컨테이너 실행 → Compose 확장 → 역프록시(Nginx) → 운영/보안 → 검증/문제 해결 → 멀티 컨테이너/로드밸런싱 )
+
+사전 전제: WebSocket 업그레이드(101 Switching Protocols) 유지, 녹취/로그 보존 정책, TLS 및 방화벽 정책을 사전에 확정합니다.
 
 ---
 
-## 2. 리눅스 2노드 + 로드밸런싱
+## 1. 공통 준비 사항
+
+- 런타임/도구: Node.js 22.x, npm 10.x 이상, Git
+- 비밀/환경변수: `.env`(또는 Vault/Secrets Manager)로 자격 증명 관리
+- 저장소: 로그/녹취 저장 위치(로컬/NFS/S3 등) 결정
+- 모니터링: 로그 수집기(ELK/OpenSearch), Metrics(Prometheus 등) 구성
+
+---
+
+## 2. 리눅스 2노드 + 로드밸런싱(시스템 서비스 운영)
 
 ### 2.1 구성 예시
 
@@ -23,9 +32,9 @@ AudioHook을 운영 환경에 배포하기 위한 대표 시나리오(리눅스 
 | app01 | 172.16.10.11 | AudioHook 인스턴스 |
 | app02 | 172.16.10.12 | AudioHook 인스턴스 |
 | lb01  | 172.16.10.10 | Nginx/HAProxy, TLS 종료 및 WebSocket 프록시 |
-| 스토리지 | NFS/S3 | 녹취 파일 공유 필요 시 사용 |
+| 스토리지 | NFS/S3 | 녹취 공유 필요 시 |
 
-### 2.2 애플리케이션 설치 (각 앱 노드)
+### 2.2 애플리케이션 설치(각 앱 노드)
 
 ```bash
 sudo useradd --system --home /opt/audiohook --shell /bin/bash audiohook
@@ -37,7 +46,7 @@ sudo -u audiohook npm ci --omit=dev
 sudo -u audiohook npm run build
 ```
 
-### 2.3 systemd 서비스
+### 2.3 systemd 서비스(각 앱 노드)
 
 ```bash
 sudo tee /etc/systemd/system/audiohook.service <<'EOF'
@@ -61,11 +70,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now audiohook
 ```
 
-### 2.4 Nginx 로드밸런서 예시
+### 2.4 Nginx 로드밸런서(lb01)
 
 ```nginx
 upstream audiohook_upstream {
-    ip_hash;                         # 세션 스티키 필요 시
+    ip_hash;                         # 세션 고정 필요 시
     server 172.16.10.11:3000;
     server 172.16.10.12:3000;
 }
@@ -98,170 +107,38 @@ server {
 }
 ```
 
-### 2.5 헬스체크 및 관측
+### 2.5 헬스체크/모니터링
 
-- `/health` 응답 코드 확인(로드밸런서 헬스 타겟)
-- Prometheus `/metrics` 노출 시 스크래핑 구성
-- 중앙 로그 수집(Fluent Bit → Elasticsearch 등)
-- failover 테스트: app01 중지 후 세션 유지 확인
-
----
-
-## 3. Docker 기반 배포
-
-### 3.1 이미지 빌드 및 태깅
-
-```bash
-docker build -t audiohook:latest .
-docker tag audiohook:latest registry.example.com/audiohook:latest
-docker push registry.example.com/audiohook:latest
-```
-
-### 3.2 Docker Compose (2 인스턴스 + Nginx)
-
-```yaml
-services:
-  app:
-    image: registry.example.com/audiohook:latest
-    restart: unless-stopped
-    env_file: ./.env
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-    deploy:
-      replicas: 2
-    expose:
-      - "3000"
-  proxy:
-    image: nginx:1.25
-    ports:
-      - "3000:80"
-    volumes:
-      - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - app
-```
-
-```bash
-docker compose up -d
-```
-
-### 3.3 롤링 업데이트
-
-```bash
-docker compose pull app
-docker compose up -d --no-deps app
-```
+- `/health` 200 OK 확인(로드밸런서 타겟)
+- 로그 중앙 수집 및 대시보드(예: ELK/OpenSearch)
+- 장애 시나리오: app01 중지 후 세션 지속성 확인
 
 ---
 
-## 4. AWS Fargate + S3
+## 3. Docker 기반 배포( Rocky Linux 9.5 )
 
-### 4.1 아키텍처 개요
+Rocky Linux 9.5에서 Docker 설치부터 단일 실행/Compose/역프록시/운영 및 멀티 컨테이너까지 한 번에 정리합니다. SELinux Enforcing, firewalld 활성화를 기본 가정합니다.
 
-- **ECS 서비스** (Fargate) + **ALB** (WebSocket 지원, Idle timeout 충분히 설정)
-- **S3**: `RECORDING_STORAGE=s3` 설정, 녹취 저장소로 사용
-- **Secrets Manager/SSM**: API Key, STT 자격 증명 저장
-- **CloudWatch Logs**, **Amazon Managed Prometheus/Grafana**(선택)
-
-### 4.2 Task Definition 핵심
-
-```json
-{
-  "family": "audiohook",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "1024",
-  "memory": "2048",
-  "networkMode": "awsvpc",
-  "containerDefinitions": [
-    {
-      "name": "audiohook",
-      "image": "<account>.dkr.ecr.ap-northeast-2.amazonaws.com/audiohook:latest",
-      "portMappings": [{ "containerPort": 3000 }],
-      "environment": [
-        { "name": "NODE_ENV", "value": "production" },
-        { "name": "PORT", "value": "3000" },
-        { "name": "RECORDING_STORAGE", "value": "s3" },
-        { "name": "S3_BUCKET", "value": "audiohook-recordings" },
-        { "name": "S3_PREFIX", "value": "sessions/" }
-      ],
-      "secrets": [
-        { "name": "API_KEY", "valueFrom": "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:audiohook/api-key" }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/audiohook",
-          "awslogs-region": "ap-northeast-2",
-          "awslogs-stream-prefix": "service"
-        }
-      }
-    }
-  ]
-}
-```
-
-### 4.3 S3 권한 (Task Role IAM Policy)
-
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "s3:PutObject",
-    "s3:GetObject",
-    "s3:DeleteObject"
-  ],
-  "Resource": "arn:aws:s3:::audiohook-recordings/*"
-}
-```
-
-### 4.4 ALB 설정
-
-- Listener: 443 (TLS) → Target group: HTTP 1.1, port 3000
-- Idle timeout: 최소 120초
-- 헬스체크: `/health` (200 OK)
-
-### 4.5 CI/CD 파이프라인
-
-1. GitHub Actions 또는 CodeBuild로 Docker 이미지 빌드 → ECR 업로드
-2. `aws ecs update-service --cluster audiohook --service audiohook --force-new-deployment`
-3. CloudWatch Alarm, SNS로 오류 알림
-4. IaC(Terraform, CDK)로 인프라 관리 권장
-
----
-
-## 5. 운영 체크리스트
-
-
----
-
-## 6. Rocky Linux 9.5 + Docker 배포(전체 절차)
-
-Rocky Linux 9.5 환경에서 Docker 설치부터 앱 컨테이너 실행, Compose 확장, 역프록시(Nginx), 운영/보안 설정, 검증/문제 해결까지 한 번에 정리했습니다. SELinux Enforcing와 firewalld 활성화를 기본 가정합니다.
-
-### 6.1 Docker 설치
-
-- 기존 Docker 제거 → 공식 리포지토리 등록 → Docker Engine/CLI/Buildx/Compose 설치 → 서비스 활성화 → 사용자 그룹 추가
+### 3.1 Docker 설치
 
 ```bash
-# 1) 과거 버전 제거(설치되어 있다면)
+# 1) 과거 버전 제거(있다면)
 sudo dnf remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine
 
 # 2) 플러그인 설치
 sudo dnf -y install dnf-plugins-core
 
-# 3) Docker 공식 저장소 등록(CentOS/RHEL 계열)
+# 3) Docker 공식 저장소 등록
 sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
 
-# 4) Docker Engine + Buildx + Compose 플러그인 설치
+# 4) Docker Engine + Buildx + Compose 설치
 sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 # 5) 서비스 활성화 및 기동
 sudo systemctl enable --now docker
 
-# 6) 현재 사용자 docker 그룹 추가(재로그인 필요)
+# 6) docker 그룹
 sudo usermod -aG docker $USER
-# 즉시 반영: 현재 세션에서만
 newgrp docker
 
 # 7) 확인
@@ -270,100 +147,70 @@ docker compose version
 docker info
 ```
 
-### 6.2 디렉터리와 환경 변수 준비
-
-영속 볼륨(로그/녹취)과 환경파일을 준비합니다. SELinux Enforcing 환경에서는 컨텍스트 지정이 중요합니다.
+### 3.2 디렉터리와 SELinux
 
 ```bash
-sudo mkdir -p /opt/audiohook/{logs,recordings,configs}
+sudo mkdir -p /opt/audiohook/{logs,recordings,configs,src,compose}
 sudo chown -R $USER:$USER /opt/audiohook
 
-# SELinux 컨텍스트(컨테이너가 읽기/쓰기 가능하도록)
+# SELinux: 컨테이너 쓰기 가능 라벨
 sudo chcon -Rt svirt_sandbox_file_t /opt/audiohook
 ```
 
-환경 변수 파일 예시(`/opt/audiohook/configs/.env`):
+환경 변수 예시(`/opt/audiohook/configs/.env`):
 
 ```bash
 cat > /opt/audiohook/configs/.env << 'EOF'
 NODE_ENV=production
-PORT=3000
+SERVERHOST=0.0.0.0
+SERVERPORT=3000
 LOG_LEVEL=info
 
-# 서비스 연동 값(필요 시 설정)
+# 연동(필요 시)
 CONVERSATION_LOOKUP_URL=
 CONVERSATION_LOOKUP_TOKEN=
 
 # 녹취 저장소: local | s3
 RECORDING_STORAGE=local
-
-# S3 사용 시(선택)
 S3_BUCKET=
 S3_PREFIX=sessions/
 
-# 자격 증명/비밀 값(필요 시)
+# 자격 증명(필요 시)
 # API_KEY=
-# STT_*= 
 # AWS_ACCESS_KEY_ID=
 # AWS_SECRET_ACCESS_KEY=
 # AWS_REGION=
 EOF
 ```
+    ports:
+참고: 레포 내 `configs/examples/*.env.example` 템플릿을 시작점으로 사용할 수 있습니다.
 
-### 6.3 소스 가져오기와 이미지 빌드
-
-레포를 서버로 가져와 이미지를 빌드합니다. 레포 루트의 `Dockerfile`을 사용합니다.
+### 3.3 소스 가져오기와 이미지 빌드
 
 ```bash
-cd /opt
-git clone <your-repo-url> audiohook
-cd audiohook/app
+# 1) 레포 클론 또는 업데이트
+git clone https://github.com/i4way-hong/i4way-Audio-Hook-Server.git /opt/audiohook/src || true
+cd /opt/audiohook/src
+git pull --rebase || true
 
-# 준비한 .env 배치(경로 확인)
-cp /opt/audiohook/configs/.env ./.env
+# 2) 빌드 컨텍스트로 이동
+#   - 리포 루트에 Dockerfile이 있는 경우: /opt/audiohook/src
+#   - app/ 하위에 Dockerfile이 있는 경우: /opt/audiohook/src/app
+if [ -f /opt/audiohook/src/Dockerfile ]; then cd /opt/audiohook/src; else cd /opt/audiohook/src/app; fi
 
-# 이미지 빌드
+# 3) (선택) 런타임 .env를 빌드 컨텍스트에 함께 보관하고 싶다면 복사
+cp -f /opt/audiohook/configs/.env ./.env 2>/dev/null || true
+
+# 4) 이미지 빌드(태그 정책은 운영 표준에 맞게)
 docker build -t audiohook:latest .
+# docker build -t audiohook:1.0.0 -t audiohook:latest .
 
-# (선택) 레지스트리에 태그/푸시
+# 5) (선택) 레지스트리 푸시
 # docker tag audiohook:latest registry.example.com/audiohook:latest
 # docker push registry.example.com/audiohook:latest
 ```
 
-# 아래와 같이 .env 파일을 공용파일과 컨테이너별로 분리해 사용할 수도 있음.
-services:
-  app1:
-    image: audiohook:latest
-    restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/base.env
-      - /opt/audiohook/configs/container1/.env   # app1 전용
-    environment:
-      PORT: "3000"             # 앱 내부 포트(변경 없다면 base.env로)
-    ports:
-      - "3001:3000"            # 호스트 3001 -> 컨테이너 3000
-    volumes:
-      - /opt/audiohook/logs:/app/logs
-      - /opt/audiohook/recordings:/app/recordings
-
-  app2:
-    image: audiohook:latest
-    restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/base.env
-      - /opt/audiohook/configs/container2/.env   # app2 전용
-    environment:
-      PORT: "3000"
-    ports:
-      - "3002:3000"            # 호스트 3002 -> 컨테이너 3000
-    volumes:
-      - /opt/audiohook/logs:/app/logs
-      - /opt/audiohook/recordings:/app/recordings
-
-
-### 6.4 단일 컨테이너 실행(docker run)
-
-로그/녹취 디렉터리를 호스트에 영속화하고 포트 3000을 노출합니다.
+### 3.4 단일 컨테이너 실행(docker run)
 
 ```bash
 docker run -d \
@@ -375,10 +222,10 @@ docker run -d \
   -v /opt/audiohook/recordings:/app/recordings \
   audiohook:latest
 
-# SELinux 권한 오류 시 :Z 옵션 활용
+# SELinux 이슈 시 :Z 옵션
 # -v /opt/audiohook/logs:/app/logs:Z -v /opt/audiohook/recordings:/app/recordings:Z
 
-# 방화벽 허용
+# 방화벽
 sudo firewall-cmd --permanent --add-port=3000/tcp
 sudo firewall-cmd --reload
 
@@ -387,32 +234,24 @@ docker logs -f audiohook
 curl -s http://localhost:3000/health
 ```
 
-### 6.5 Docker Compose(v2) 구성
-
-파일 기반으로 실행을 관리합니다. 아래는 앱만 포함한 기본 예시입니다.
+### 3.5 Docker Compose(앱 단독)
 
 ```yaml
 services:
   app:
     image: audiohook:latest
-    # 또는: registry.example.com/audiohook:latest
     restart: unless-stopped
     env_file:
       - /opt/audiohook/configs/.env
     environment:
       NODE_ENV: production
-      PORT: "3000"
+      SERVERHOST: "0.0.0.0"
+      SERVERPORT: "3000"
     ports:
       - "3000:3000"
     volumes:
       - /opt/audiohook/logs:/app/logs
       - /opt/audiohook/recordings:/app/recordings
-    # 이미지 내부에 curl/wget이 있을 때만 healthcheck 사용 권장
-    # healthcheck:
-    #   test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
-    #   interval: 30s
-    #   timeout: 3s
-    #   retries: 3
 ```
 
 실행/업데이트:
@@ -422,19 +261,17 @@ docker compose up -d
 docker compose ps
 docker compose logs -f app
 
-# 레지스트리 사용 시 롤링 업데이트
+# 롤링 업데이트(레지스트리 사용 시)
 docker compose pull app
 docker compose up -d app
 
-# 단일 호스트에서 스케일(주의: 포트는 1개만 바인드 가능)
-docker compose up -d --scale app=2
+# 단일 호스트 스케일(주의: 동일 포트 바인딩 불가)
+# docker compose up -d --scale app=2
 ```
 
-### 6.6 Nginx 역프록시(웹소켓)
+### 3.6 Nginx 역프록시(웹소켓)
 
-웹소켓 업그레이드 헤더와 충분한 타임아웃을 설정합니다. 외부는 80/443 → 내부 app:3000으로 전달합니다.
-
-`configs/nginx.conf` 예시:
+configs/nginx.conf:
 
 ```nginx
 worker_processes auto;
@@ -453,11 +290,7 @@ http {
 
   server {
     listen 80;
-
-    # TLS 사용 시 443 리스너와 인증서 설정 추가
-    # listen 443 ssl;
-    # ssl_certificate     /etc/nginx/ssl/fullchain.pem;
-    # ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+    # listen 443 ssl;  # TLS 사용 시
 
     location / {
       proxy_pass http://audiohook_upstream;
@@ -469,27 +302,23 @@ http {
       proxy_send_timeout 180s;
     }
 
-    location /health {
-      proxy_pass http://audiohook_upstream/health;
-    }
+    location /health { proxy_pass http://audiohook_upstream/health; }
   }
 }
 ```
 
-Compose를 Nginx 포함으로 확장:
+Compose(프록시 포함):
 
 ```yaml
 services:
   app:
     image: audiohook:latest
     restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/.env
+    env_file: [ /opt/audiohook/configs/.env ]
     environment:
       NODE_ENV: production
       PORT: "3000"
-    expose:
-      - "3000"
+    expose: [ "3000" ]
     volumes:
       - /opt/audiohook/logs:/app/logs
       - /opt/audiohook/recordings:/app/recordings
@@ -503,11 +332,10 @@ services:
     volumes:
       - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
       # - /opt/audiohook/ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - app
+    depends_on: [ app ]
 ```
 
-방화벽 허용:
+방화벽:
 
 ```bash
 sudo firewall-cmd --permanent --add-service=http
@@ -515,98 +343,62 @@ sudo firewall-cmd --permanent --add-service=http
 sudo firewall-cmd --reload
 ```
 
-참고: 동일 호스트에서 app을 2개 이상 띄우면 포트 바인딩 충돌이 발생하므로, 외부 노출은 프록시 단일 포트(80/443)로 하고 내부 네트워크에서 app 컨테이너로 라우팅하는 구성이 일반적입니다. 다중 인스턴스 로드밸런싱은 외부 L7(예: ALB/HAProxy/Nginx upstream 다중 서버) 권장.
+메모: 동일 호스트에서 app 복제본을 여러 개 띄울 경우 외부 포트 충돌이 나므로, 외부는 프록시 80/443만 노출하고 내부 네트워크로 라우팅하세요.
 
-### 6.7 보안/운영 체크리스트
+### 3.7 운영/보안 체크리스트
 
-- 환경 변수/비밀 값: `.env`의 필수 항목(예: `LOG_LEVEL`, `CONVERSATION_LOOKUP_*`, STT 자격 증명) 확인. 비밀은 외부 보관소(Vault/Secrets Manager) 권장
-- SELinux: 볼륨 대상에 `chcon -Rt svirt_sandbox_file_t /opt/audiohook` 또는 볼륨 옵션 `:Z` 사용
-- 방화벽: 프록시 사용 시 80/443, 직접 노출 시 3000/tcp 개방
-- 로그/모니터링: `docker compose logs -f app` 또는 파일 볼륨(`/app/logs`) 수집. Prometheus/ELK/OpenSearch 연계
-- 재시작 정책: `--restart unless-stopped` 또는 Compose의 `restart: unless-stopped`
-- 롤링 업데이트: `docker compose pull app; docker compose up -d app` 또는 로컬 빌드 후 동일 명령
-- 웹소켓 타임아웃: 프록시의 `proxy_read_timeout`, `proxy_send_timeout` 충분히 크게(예: 180s+)
-- TLS: 운영 환경에서는 HTTPS 권장(ACME/Certbot 또는 사설 PKI)
+- 비밀/환경: `.env` 필수값 검토, 비밀은 외부 보관소 활용 권장
+- SELinux: `chcon -Rt svirt_sandbox_file_t /opt/audiohook` 또는 볼륨 `:Z`
+- 방화벽: 프록시 80/443 또는 직접 노출 시 3000/tcp
+- 로그/모니터링: `docker compose logs -f app` + 파일 수집; Prometheus/OpenSearch 연계
+- 재시작 정책: `--restart unless-stopped` 또는 Compose `restart`
+- 웹소켓 타임아웃: `proxy_read_timeout`, `proxy_send_timeout` 충분히 크게(예: 180s)
+- TLS: 운영은 HTTPS 권장(ACME/파일 인증서)
 
-### 6.8 검증(스모크 테스트)
+### 3.8 검증(스모크 테스트)
 
 ```bash
 docker compose ps
 docker compose logs -f app
 curl -i http://localhost:3000/health
-# 프록시 뒤라면
-curl -i http://<서버IP 또는 도메인>/health
+# 프록시 뒤에서 테스트
+echo "http://<SERVER_IP_OR_DOMAIN>/health"; curl -i http://<SERVER_IP_OR_DOMAIN>/health
 ```
 
-성공 기준: `200 OK` 응답, 웹소켓 경로는 `101 Switching Protocols` 동작(클라이언트 테스트로 확인).
+성공 기준: `/health` 200 OK, 웹소켓은 클라이언트로 101 업그레이드 확인.
 
-### 6.9 문제 해결(빈출)
+### 3.9 문제 해결(자주 만남)
 
-- 권한/파일 접근 오류(EPERM/Permission denied): SELinux 미설정 가능성 → `chcon -Rt svirt_sandbox_file_t /opt/audiohook` 또는 `:Z` 볼륨 옵션
-- 포트 바인딩 실패: 다른 프로세스 점유 → `sudo ss -lntp | grep :3000` 확인 후 중지
-- 컨테이너 즉시 종료: `docker logs <컨테이너>`로 Node 오류 확인, `.env` 필수 값 누락 여부 점검
-- 다중 인스턴스 접속 문제: 프록시/로드밸런서 필요. Nginx upstream 다중 서버 또는 외부 L7 권장
-- S3 업로드 실패: 자격 증명/버킷 권한/네트워크 확인(AWS_ACCESS_KEY_ID/SECRET, IAM Policy, VPC egress 등)
+- 권한/EPERM: SELinux 라벨 누락 가능 → `chcon -Rt svirt_sandbox_file_t /opt/audiohook` 또는 볼륨 `:Z`
+- 포트 바인딩 실패: 다른 프로세스 점유 → `sudo ss -lntp | grep :3000`
+- 컨테이너 즉시 종료: `docker logs <name>`로 오류 확인, `.env` 필수값 점검
+- 다중 인스턴스 트래픽: 프록시/로드밸런서 구성 필요(Nginx upstream/외부 L7)
+- S3 실패: 자격 증명/IAM/네트워크(e.g., egress) 확인
 
-### 6.10 빠른 실행 요약
+### 3.10 멀티 컨테이너와 로드밸런싱
 
-```bash
-# 1) Docker 설치: 6.1 참고
+여러 컨테이너를 자동 감지/분산하려면 Traefik이 단순하고 견고합니다. Nginx 수동 upstream이나 Docker Swarm도 선택지입니다.
 
-# 2) .env 작성
-vi /opt/audiohook/configs/.env
+#### 3.10.1 Compose + Traefik(권장)
 
-# 3) 빌드/실행(단일)
-cd /opt/audiohook/app
-docker build -t audiohook:latest .
-docker run -d --name audiohook --restart unless-stopped \
-  --env-file /opt/audiohook/configs/.env -p 3000:3000 \
-  -v /opt/audiohook/logs:/app/logs \
-  -v /opt/audiohook/recordings:/app/recordings audiohook:latest
-
-# 4) Compose로 실행
-docker compose up -d
-docker compose logs -f app
-```
-
-## 7. 멀티 컨테이너와 로드밸런싱
-
-여러 컨테이너로 확장(스케일링)하고, 트래픽을 균등 분배하는 대표 접근을 정리합니다. WebSocket 지원과 운영 자동화를 고려하면 Traefik을 사용하는 구성이 가장 단순하고 견고합니다.
-
-### 7.1 옵션 비교 요약
-
-- Compose + Nginx(수동 upstream): 간단하지만 컨테이너 수 변경 시 upstream 재설정/재배포 필요 → 운영성 낮음
-- Compose + Traefik(Docker provider): 컨테이너 자동 감지, WebSocket 자동 지원, 스케일 변경 자동 반영 → 권장
-- Docker Swarm: 서비스 VIP로 내장 LB 제공, `deploy.*`가 정식 동작 → 다중 노드 확장에 유리
-- 외부 L7 LB(ALB/HAProxy 등): 가장 확장성/가시성 좋음(인프라 구성 추가 필요)
-
-### 7.2 Compose + Traefik 예시(권장)
-
-Traefik이 Docker 이벤트로 컨테이너를 자동 발견하여 라우팅/로드밸런싱합니다. WebSocket 업그레이드는 기본 지원합니다.
-
-`compose-traefik.yaml` 예시:
+`compose-traefik.yaml`(요지):
 
 ```yaml
 services:
   app:
     image: audiohook:latest
     restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/.env
-    expose:
-      - "3000"           # 내부 라우팅용, 외부 포트 바인딩은 Traefik이 담당
+    env_file: [ /opt/audiohook/configs/.env ]
+    expose: [ "3000" ]
     labels:
       - traefik.enable=true
-      # 도메인이 있다면 Host 규칙 사용 권장
+      # 도메인 보유 시 Host 규칙 권장
       # - traefik.http.routers.audiohook.rule=Host(`audiohook.example.com`)
-      # 도메인 없이 포트로 받는 테스트라면 PathPrefix(`/`) 사용
       - traefik.http.routers.audiohook.rule=PathPrefix(`/`)
       - traefik.http.routers.audiohook.entrypoints=web
       - traefik.http.services.audiohook.loadbalancer.server.port=3000
-      # 필요 시 세션 고정(웹소켓 세션 지속이 필요할 때)
       # - traefik.http.services.audiohook.loadbalancer.sticky.cookie=true
-    networks:
-      - web
+    networks: [ web ]
 
   traefik:
     image: traefik:v3.1
@@ -615,37 +407,33 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
-      # TLS 사용 시 활성화
+      # TLS(선택)
       # - --entrypoints.websecure.address=:443
       # - --certificatesresolvers.le.acme.tlschallenge=true
       # - --certificatesresolvers.le.acme.email=admin@example.com
       # - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-    ports:
-      - "80:80"
-      # - "443:443"
+    ports: [ "80:80" ]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # - /opt/audiohook/letsencrypt:/letsencrypt
-    networks:
-      - web
+    networks: [ web ]
 
 networks:
-  web:
-    driver: bridge
+  web: { driver: bridge }
 ```
 
-실행과 스케일링:
+실행/스케일:
 
 ```bash
-docker compose -f compose-traefik.yaml up -d
-docker compose -f compose-traefik.yaml up -d --scale app=4
-docker compose -f compose-traefik.yaml ps
+docker compose -f /opt/audiohook/compose/compose-traefik.yaml up -d
+docker compose -f /opt/audiohook/compose/compose-traefik.yaml up -d --scale app=4
+docker compose -f /opt/audiohook/compose/compose-traefik.yaml ps
 ```
 
 메모:
-- 도메인이 있다면 `Host(audiohook.example.com)` 규칙으로 라우팅하는 것이 권장입니다.
-- WebSocket은 Traefik이 자동 처리합니다. 장기 연결이 많다면 `proxy.readTimeout` 등 고급 옵션(동적/정적 구성)을 고려하세요.
-- 세션 고정이 필요한 경우 sticky cookie를 활성화합니다.
+- 도메인이 있다면 Host(`audiohook.example.com`) 규칙 사용 권장
+- WebSocket 업그레이드는 Traefik이 자동 처리
+- sticky 세션이 필요하면 cookie 기반 sticky 활성화
 
 리소스 제한(일반 Compose):
 
@@ -653,225 +441,73 @@ docker compose -f compose-traefik.yaml ps
 services:
   app:
     image: audiohook:latest
-    # 컨테이너 단위 리소스 제한(Compose 일반 모드에서 동작)
-    cpus: 1.0           # vCPU 1개 할당
-    mem_limit: 1g       # 메모리 제한
-    cpuset: "0-1"       # 특정 코어(0,1)에 핀닝(선택)
+    cpus: 1.0
+    mem_limit: 1g
+    cpuset: "0-1"
 ```
 
-참고: `deploy.resources.*`는 Swarm에서 정식 동작합니다. 일반 Compose에서는 위와 같은 top-level `cpus`, `mem_limit`, `cpuset` 사용을 권장합니다(환경에 따라 지원 차이가 있을 수 있어 `docker compose config`로 유효성 확인 권장).
-
-### 7.3 Docker Swarm 예시(VIP 기반 LB)
-
-Swarm은 서비스 VIP를 통해 replicas에 자동 분산합니다. 다중 노드 확장과 표준화된 `deploy.*`를 활용할 수 있습니다.
-
-배포 절차:
+#### 3.10.2 Docker Swarm(VIP 기반 LB)
 
 ```bash
 docker swarm init
-docker stack deploy -c compose-swarm.yaml audiohook
+docker stack deploy -c /opt/audiohook/compose/compose-swarm.yaml audiohook
 docker service ls
 docker service ps audiohook_app
 ```
 
-`compose-swarm.yaml` 예시(스니펫):
+compose-swarm.yaml(핵심):
 
 ```yaml
 services:
   app:
     image: audiohook:latest
-    env_file:
-      - /opt/audiohook/configs/.env
+    env_file: [ /opt/audiohook/configs/.env ]
     deploy:
       replicas: 4
-      restart_policy:
-        condition: any
+      restart_policy: { condition: any }
       resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-        reservations:
-          cpus: "0.50"
-          memory: 512M
-    networks:
-      - web
+        limits: { cpus: "1.0", memory: 1G }
+        reservations: { cpus: "0.50", memory: 512M }
+    networks: [ web ]
 
   proxy:
     image: nginx:1.25
-    ports:
-      - "80:80"
-    depends_on:
-      - app
-    networks:
-      - web
-    # nginx.conf에서 proxy_pass http://app:3000; 로 VIP에 연결
+    ports: [ "80:80" ]
+    depends_on: [ app ]
+    networks: [ web ]
 
 networks:
-  web:
-    driver: overlay
+  web: { driver: overlay }
 ```
 
-확장/축소:
+확장/축소: `docker service scale audiohook_app=6`
+
+메모: Swarm의 진가는 다중 노드에서 발휘되며 `deploy.*`를 정식 지원합니다.
+
+#### 3.10.3 CPU 코어 활용 가이드
+
+- Node.js 프로세스는 주로 단일 코어를 사용 → 컨테이너 수를 늘려 코어 병렬 활용
+- 균등 분배: 컨테이너당 `cpus: 1.0` 지정 후 replicas 조정
+- 특정 코어 핀닝: `cpuset: "0-3"`
+- Swarm: `deploy.resources` 권장, 일반 Compose: `cpus/mem_limit/cpuset` 사용
+
+### 3.11 빠른 실행 요약
 
 ```bash
-docker service scale audiohook_app=6
+# 1) Docker 설치(3.1)
+# 2) .env 작성(3.2)
+# 3) 빌드(3.3)
+cd /opt/audiohook/src/app && docker build -t audiohook:latest .
+# 4) 단일 실행(3.4)
+docker run -d --name audiohook --restart unless-stopped \
+  --env-file /opt/audiohook/configs/.env -p 3000:3000 \
+  -v /opt/audiohook/logs:/app/logs -v /opt/audiohook/recordings:/app/recordings audiohook:latest
+# 5) Compose(3.5) 또는 Traefik(3.10.1)
 ```
-
-메모:
-- Swarm의 강점은 다중 노드에서의 확장과 `deploy.*` 준수입니다. 단일 노드에서도 동작하지만, 진가는 클러스터에서 발휘됩니다.
-- 프록시는 Swarm 서비스명(app) VIP로 연결하면 자동 분산됩니다.
-
-### 7.4 CPU 코어 활용 가이드
-
-- Node.js 프로세스는 이벤트 루프 특성상 단일 프로세스가 주로 하나의 코어를 활용합니다. 컨테이너 수를 늘려(=프로세스 수 증가) 여러 코어를 병렬 활용하는 것이 가장 단순하고 효과적입니다.
-- 균등 분배를 원하면 컨테이너당 `cpus: 1.0` 정도로 할당하고, 시스템 총 코어 수에 맞춰 replicas를 조정하세요.
-- 특정 코어로 고정이 필요하면 `cpuset: "0-3"`처럼 핀닝할 수 있습니다(핫패스 튜닝 시 유용).
-- Swarm에서는 `deploy.resources.limits`로 일관되게 관리하고, 일반 Compose에서는 `cpus/mem_limit/cpuset`를 서비스에 직접 지정하세요.
 
 ---
 
-## 8. 서비스별 .env 템플릿(예제 파일 포함)
-
-레포에 예제 템플릿을 추가했습니다. 공통값은 `base.env.example`, 컨테이너별 차이는 `container1.env.example`, `container2.env.example`에 넣고, 배포 수준 변수 치환(호스트 포트 등)은 `deploy.env.example`로 관리합니다.
-
-예제 파일 경로:
-- `configs/examples/base.env.example`
-- `configs/examples/container1.env.example`
-- `configs/examples/container2.env.example`
-- `configs/examples/deploy.env.example`
-
-### 8.1 예제 내용
-
-`base.env.example` (공통값)
-
-```
-NODE_ENV=production
-PORT=3000
-LOG_LEVEL=info
-
-CONVERSATION_LOOKUP_URL=
-CONVERSATION_LOOKUP_TOKEN=
-
-RECORDING_STORAGE=local
-
-# S3 사용 시 주석 해제
-# S3_BUCKET=audiohook-recordings
-# S3_PREFIX=sessions/
-# AWS_ACCESS_KEY_ID=
-# AWS_SECRET_ACCESS_KEY=
-# AWS_REGION=ap-northeast-2
-
-# 외부 API/STT (선택)
-# API_KEY=
-# STT_VENDOR=
-# STT_API_KEY=
-```
-
-`container1.env.example` (컨테이너1 전용 덮어쓰기)
-
-```
-INSTANCE_ID=app1
-LOG_LEVEL=debug
-
-# 선택: 컨테이너1만 S3 프리픽스 분리
-# RECORDING_STORAGE=s3
-# S3_BUCKET=audiohook-recordings
-# S3_PREFIX=sessions/app1/
-```
-
-`container2.env.example` (컨테이너2 전용 덮어쓰기)
-
-```
-INSTANCE_ID=app2
-LOG_LEVEL=info
-
-# 선택: 컨테이너2만 S3 프리픽스 분리
-# RECORDING_STORAGE=s3
-# S3_BUCKET=audiohook-recordings
-# S3_PREFIX=sessions/app2/
-```
-
-`deploy.env.example` (Compose 변수 치환용: 호스트 포트 등)
-
-```
-HOST_PORT_APP1=3001
-HOST_PORT_APP2=3002
-```
-
-### 8.2 서버 적용 순서(권장 레이아웃)
-
-서버에서는 `/opt/audiohook/configs/` 아래에 다음과 같이 배치하세요.
-
-```
-/opt/audiohook/configs/
-  base.env
-  container1.env
-  container2.env
-  deploy.env              # (선택) Compose 치환용
-```
-
-레포 예제를 복사하여 시작:
-
-```bash
-cp configs/examples/base.env.example       /opt/audiohook/configs/base.env
-cp configs/examples/container1.env.example /opt/audiohook/configs/container1.env
-cp configs/examples/container2.env.example /opt/audiohook/configs/container2.env
-cp configs/examples/deploy.env.example     /opt/audiohook/configs/deploy.env   # 선택
-```
-
-필요 값(비밀 포함)을 채운 뒤 권한을 제한하세요.
-
-```bash
-chmod 600 /opt/audiohook/configs/*.env
-```
-
-### 8.3 Compose에서 사용 예시
-
-- 프록시 사용(권장): 앱은 내부 포트만 노출하고 프록시가 80/443을 받습니다.
-
-```yaml
-services:
-  app1:
-    image: audiohook:latest
-    restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/base.env
-      - /opt/audiohook/configs/container1.env
-    expose:
-      - "3000"
-
-  app2:
-    image: audiohook:latest
-    restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/base.env
-      - /opt/audiohook/configs/container2.env
-    expose:
-      - "3000"
-
-  # traefik/nginx는 80/443만 호스트에 바인딩
-```
-
-- 프록시 없이 컨테이너별 포트를 직접 바인딩해야 한다면, Compose 변수 치환용 `deploy.env`를 함께 사용하세요.
-
-```yaml
-services:
-  app1:
-    image: audiohook:latest
-    restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/base.env
-      - /opt/audiohook/configs/container1.env
-    ports:
-      - "${HOST_PORT_APP1:-3001}:3000"
-
-  app2:
-    image: audiohook:latest
-    restart: unless-stopped
-    env_file:
-      - /opt/audiohook/configs/base.env
-      - /opt/audiohook/configs/container2.env
-    ports:
+문의/이슈: 운영 중 문제나 개선 요청은 레포 이슈로 남겨주세요.
       - "${HOST_PORT_APP2:-3002}:3000"
 ```
 
@@ -887,7 +523,7 @@ docker compose --env-file /opt/audiohook/configs/deploy.env up -d
 
 #### 8.3.1 파일 저장 위치와 실행 명령(프록시 사용 시 권장)
 
-- 권장 경로: `/opt/audiohook/ㅊ/compose-traefik.yaml`
+- 권장 경로: `/opt/audiohook/compose/compose-traefik.yaml`
 - 이유: 소스와 운영 구성을 분리하고, 절대경로 env_file을 사용해 어디서 실행해도 안정적으로 동작
 
 최소 요구사항(사전 체크):
