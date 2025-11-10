@@ -166,6 +166,29 @@ SERVERHOST=0.0.0.0
 SERVERPORT=3000
 LOG_LEVEL=info
 
+# STT 설정 (프로토콜 선택)
+# STT_PROTOCOL=websocket  # websocket | tcp | grpc | mrcp
+# STT_ENDPOINT=ws://stt.example.com:8080/stt
+# STT_ENCODING=L16
+# STT_RATE=8000
+# STT_MONO=true
+
+# (선택) gRPC 사용 시 Forwarder 추가 변수
+# STT_PROTOCOL=grpc
+# STT_ENDPOINT=host:55051              # gRPC 대상 호스트:포트
+# STT_GRPC_AUTH_TOKEN=                 # 필요 시 인증 토큰
+# STT_GRPC_RECONNECT_ENABLED=true
+# STT_GRPC_RECONNECT_INITIAL_MS=1000
+# STT_GRPC_RECONNECT_MAX_MS=15000
+# STT_GRPC_RECONNECT_FACTOR=2.0
+# STT_GRPC_RECONNECT_JITTER=0.3
+# STT_GRPC_TLS_ENABLED=true            # TLS/mTLS 필요 시
+# STT_GRPC_TLS_CA_FILE=/certs/ca.pem
+# STT_GRPC_TLS_CERT_FILE=/certs/client.crt
+# STT_GRPC_TLS_KEY_FILE=/certs/client.key
+# STT_GRPC_TLS_OVERRIDE_AUTHORITY=stt.internal
+# STT_GRPC_KEEPALIVE_MS=20000
+
 # 연동(필요 시)
 CONVERSATION_LOOKUP_URL=
 CONVERSATION_LOOKUP_TOKEN=
@@ -502,6 +525,7 @@ cd /opt/audiohook/src/app && docker build -t audiohook:latest .
 docker run -d --name audiohook --restart unless-stopped \
   --env-file /opt/audiohook/configs/.env -p 3000:3000 \
   -v /opt/audiohook/logs:/app/logs -v /opt/audiohook/recordings:/app/recordings audiohook:latest
+# (gRPC 사용 시 예시 .env 추가 항목 참고: STT_PROTOCOL=grpc 와 STT_GRPC_* 변수들)
 # 5) Compose(3.5) 또는 Traefik(3.10.1)
 ```
 
