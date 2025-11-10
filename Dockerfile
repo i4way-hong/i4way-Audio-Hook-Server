@@ -22,6 +22,10 @@ COPY "./audiohook" "/buildarea/audiohook/"
 
 RUN npm run build
 
+## Ensure JS helper transports (not compiled by tsc) are available in dist
+RUN mkdir -p /buildarea/dist/src \
+    && cp -v /buildarea/src/*.js /buildarea/dist/src/ 2>/dev/null || true
+
 RUN npm prune --production
 
 #RUN du -h /buildarea 1>&2 && exit 1
