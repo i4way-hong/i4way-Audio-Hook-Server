@@ -1,4 +1,4 @@
-ARG NODE_VERSION=16
+ARG NODE_VERSION=22
 
 # First, build the project
 FROM node:${NODE_VERSION} AS builder
@@ -11,6 +11,7 @@ COPY [\
     "./package.json",\
     "./package-lock.json",\
     "./tsconfig.json",\
+    "./audiohook-sample-server-1.0.2.tgz",\
     "/buildarea/"\
 ]
 

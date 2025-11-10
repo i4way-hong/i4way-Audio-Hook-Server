@@ -37,14 +37,14 @@ async function performLookup(conversationId: string, logger?: Logger): Promise<C
     if (!conversationId || isNullUuid(conversationId as unknown as Uuid)) {
         return null;
     }
-    logger?.debug?.(`[conversation-lookup] Pass 1`);
+    logger?.debug?.('[conversation-lookup] Pass 1');
     if (CACHE_SECONDS > 0) {
         const cached = cache.get(conversationId);
         if (cached && cached.expires > now()) {
             return cached.data;
         }
     }
-    logger?.debug?.(`[conversation-lookup] Pass 2`);
+    logger?.debug?.('[conversation-lookup] Pass 2');
     let requestUrl: URL;
     try {
         requestUrl = new URL(LOOKUP_BASE_URL);
@@ -52,7 +52,7 @@ async function performLookup(conversationId: string, logger?: Logger): Promise<C
         logger?.warn?.(`Conversation lookup URL invalid: ${String(err)}`);
         return null;
     }
-    logger?.debug?.(`[conversation-lookup] Pass 3`);
+    logger?.debug?.('[conversation-lookup] Pass 3');
     requestUrl.searchParams.set(QUERY_PARAM, conversationId);
 
     const controller = new AbortController();

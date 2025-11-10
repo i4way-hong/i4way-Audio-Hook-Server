@@ -224,9 +224,10 @@ if [ -f /opt/audiohook/src/Dockerfile ]; then cd /opt/audiohook/src; else cd /op
 # 3) (선택) 런타임 .env를 빌드 컨텍스트에 함께 보관하고 싶다면 복사
 cp -f /opt/audiohook/configs/.env ./.env 2>/dev/null || true
 
-# 4) 이미지 빌드(태그 정책은 운영 표준에 맞게)
-docker build -t audiohook:latest .
-# docker build -t audiohook:1.0.0 -t audiohook:latest .
+# 4) 이미지 빌드
+#docker build -t audiohook:latest .
+# 태그정책 추가
+docker build -t audiohook:1.0.0 -t audiohook:latest .
 
 # 5) (선택) 레지스트리 푸시
 # docker tag audiohook:latest registry.example.com/audiohook:latest
