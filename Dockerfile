@@ -34,9 +34,6 @@ EXPOSE $SERVERPORT
 # PM2 설치
 RUN npm install  pm2 -g
 
-# pm2-prometheus-exporter 설치
-RUN pm2 install pm2-prometheus-exporter
-
 # 빌드 결과물 복사
 COPY --from=builder /buildarea/node_modules ./node_modules
 COPY --from=builder /buildarea/dist ./dist

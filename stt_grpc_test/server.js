@@ -875,23 +875,27 @@ function streamingRecognize(call) {
         initAt = Date.now();
         encodingType = msg.init.encoding || 'LINEAR16';
         declaredSampleRate = msg.init.sample_rate_hz || 8000;
+        // Log raw init object (avoid double JSON stringification backslash escaping)
         log('info', 'init_payload', {
           clientSessionId: msg.client_session_id || null,
-          init: safeJson(msg.init)
+          init: msg.init
         });
         if (msg.tags && Object.keys(msg.tags).length > 0) {
-          log('info', 'init_tags', { tags: safeJson(msg.tags) });
+          // Log raw tags object
+          log('info', 'init_tags', { tags: msg.tags });
         }
         const vendorParamsRaw = msg.init.vendor_params ?? msg.init.vendorParams ?? null;
         const vendorParams = toPlainObject(vendorParamsRaw);
         if (Object.keys(vendorParams).length > 0) {
-          log('info', 'init_vendor_params', { vendorParams: safeJson(vendorParams) });
+          // Log raw vendor params object
+          log('info', 'init_vendor_params', { vendorParams });
         }
         updateContextFromPayload(msg.init, conversationContext);
         updateContextFromTags(msg.tags, conversationContext);
         updateContextFromVendorParams(vendorParams, conversationContext);
         if (Object.keys(conversationContext).length > 0) {
-          log('debug', 'init_conversation_context', { conversationContext: safeJson(conversationContext) });
+          // Raw conversation context
+          log('debug', 'init_conversation_context', { conversationContext });
         } else {
           log('debug', 'init_conversation_context_empty', {});
         }

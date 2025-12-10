@@ -757,10 +757,15 @@ const server = net.createServer((socket) => {
     }
   }
 
-  // send INIT_HEX if provided
-  if (process.env.INIT_HEX) {
-    try { socket.write(Buffer.from(process.env.INIT_HEX.replace(/[^0-9a-fA-F]/g, ''), 'hex')); } catch {}
-  }
+  // send INIT_HEX if provided (support alias STT_TCP_INIT_HEX)
+  try {
+    const initHexRaw = process.env.INIT_HEX || process.env.STT_TCP_INIT_HEX || '';
+    const initHex = initHexRaw.replace(/[^0-9a-fA-F]/g, '');
+    if (initHex) {
+      socket.write(Buffer.from(initHex, 'hex'));
+      log('info', 'send_init_hex', { bytes: Math.ceil(initHex.length / 2), hex: initHex });
+    }
+  } catch {}
 
   // 3s tick: send a Korean text line
   const speakTimer = setInterval(() => {
@@ -812,6 +817,19 @@ const server = net.createServer((socket) => {
   });
 
   socket.on('end', () => {
+    // Send BYE_HEX (or STT_TCP_BYE_HEX) before we close our write side, so the client can actually receive it.
+    try {
+      const byeHexRaw = process.env.BYE_HEX || process.env.STT_TCP_BYE_HEX || '';
+      const byeHex = byeHexRaw.replace(/[^0-9a-fA-F]/g, '');
+      if (byeHex && !socket.destroyed) {
+        // Send BYE payload and FIN in one go
+        socket.end(Buffer.from(byeHex, 'hex'));
+        log('info', 'send_bye_hex', { bytes: Math.ceil(byeHex.length / 2), hex: byeHex });
+      } else {
+        // Gracefully half-close our side
+        try { socket.end(); } catch {}
+      }
+    } catch {}
     flushAggregates('end');
     log('debug', 'end', { ip });
   });
@@ -830,9 +848,7 @@ const server = net.createServer((socket) => {
     try { caps.rx.end(); } catch {}
     try { caps.tx.end(); } catch {}
     log('info', 'capture_saved', { combined: caps.combinedPath, rx: caps.rxPath, tx: caps.txPath, mono: caps.monoPath || undefined });
-    if (process.env.BYE_HEX) {
-      try { socket.write(Buffer.from(process.env.BYE_HEX.replace(/[^0-9a-fA-F]/g, ''), 'hex')); } catch {}
-    }
+    // NOTE: BYE_HEX is now sent during 'end' to ensure delivery before the socket fully closes.
   });
 
   socket.on('error', (err) => {
