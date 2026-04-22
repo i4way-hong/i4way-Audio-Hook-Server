@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET_DIR=${TARGET_DIR:-/app/audiohook-server-1.0.2}
+TARGET_DIR=${TARGET_DIR:-/app/audiohook-server-1.0.3}
 # NODE_MAJOR를 환경 변수로 재정의하면 특정 Node 버전을 강제하지 않고 사용할 수 있음 (예: NODE_MAJOR=20).
 NODE_MAJOR=${NODE_MAJOR:-22}
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

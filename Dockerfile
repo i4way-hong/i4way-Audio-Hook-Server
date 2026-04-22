@@ -4,7 +4,7 @@ ARG NODE_VERSION=22
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /buildarea
 
-COPY .eslintrc .eslintignore package.json package-lock.json tsconfig.json audiohook-sample-server-1.0.2.tgz ./
+COPY .eslintrc .eslintignore package.json package-lock.json tsconfig.json audiohook-sample-server-1.0.3.tgz ./
 RUN npm ci
 
 COPY src ./src

@@ -9,7 +9,7 @@ import {
     SupportedLanguages
 } from '../audiohook';
 import { registerConversationLookup } from './conversation-lookup';
-import { SocketStream } from '@fastify/websocket';
+import type WebSocket from 'ws';
 
 const isLocal = process.env['NODE_ENV'] !== 'dev';
 
@@ -26,10 +26,10 @@ export type AudioHookSessionCreateOptions = {
     supportedLanguages?: SupportedLanguages;
 } & ({
     ws: ServerWebSocket;
-    connection?: SocketStream;  // If we have a ws, the connection is optional
+    connection?: WebSocket;  // If we have a ws, the raw connection is optional
 } | {
-    ws: undefined;
-    connection: SocketStream;   // If we don't have a ws, the connection is required
+    ws?: undefined;
+    connection: WebSocket;   // If we don't have a wrapped ws, the raw connection is required
 });
 
 export const createAudioHookSession = ({ request, sessionLogLevel, supportedLanguages, ws, connection }: AudioHookSessionCreateOptions): AudioHookSessionContext => {
@@ -49,12 +49,17 @@ export const createAudioHookSession = ({ request, sessionLogLevel, supportedLang
         throw new RangeError(`Missing or invalid "audiohook-organization-id" header field. RemoteAddr: ${request.socket.remoteAddress}, Headers: ${JSON.stringify(request.headers, null, 1)}`);
     }
 
-    if(connection && isLocal && (connection.socket.binaryType !== 'nodebuffer')) {
-        throw new Error(`WebSocket binary type '${connection.socket.binaryType}' not supported`);
+    if(connection && isLocal && (connection.binaryType !== 'nodebuffer')) {
+        throw new Error(`WebSocket binary type '${connection.binaryType}' not supported`);
+    }
+
+    const upstreamWs = ws ?? connection;
+    if(!upstreamWs) {
+        throw new Error('Missing WebSocket connection for session');
     }
 
     const session = createServerSession({
-        ws: ws ?? connection.socket,
+        ws: upstreamWs,
         id: sessionId,
         logger: request.server.log.child({ session: sessionId }, { level: sessionLogLevel ?? (isLocal ? 'debug' : 'info') }),
         supportedLanguages

@@ -61,6 +61,10 @@ Fastify 기반 AudioHook 샘플 서버와 STT(음성 인식) 포워딩, UniMRCP 
 - 새로운 미디어 포맷: `audio/` 디렉터리에 변환기 추가 후 `buildPayload()` 분기 확장.
 - 사이드카 기능 확장: `sidecar/signaling/` 하위에 모듈 추가하고 `MRCP_SIDECAR_SIGNALING_MODULE` 환경변수로 경로 지정.
 
+## 개발서버 접속 정보
+IP : 172.168.10.24 
+계정 : appadm/Genesys!@#
+
 ## 🐳 Docker & Compose (요약)
 
 프로덕션 실행 시 다단계(multi-stage) Docker 빌드를 사용합니다.
@@ -213,7 +217,7 @@ STT_WS_SUBPROTOCOL=audiohook-v1   # (O) ← 별도 주석 줄 사용
 | `scripts/` | RTP 패킷 송출 등 보조 스크립트. |
 | `recordings/`, `logs/` | 기본 출력 디렉터리(WAV 녹음, 회전 로그). |
 
-추가적으로 `audiohook-sample-server-1.0.2.tgz` 는 AudioHook 코어 패키지의 프리빌드 번들입니다.
+추가적으로 `audiohook-sample-server-1.0.3.tgz` 는 AudioHook 코어 패키지의 프리빌드 번들입니다.
 
 ---
 
@@ -274,6 +278,7 @@ STT_WS_SUBPROTOCOL=audiohook-v1   # (O) ← 별도 주석 줄 사용
 | `LOG_PREFIX` | `app` | 회전 로그 파일 접두사. |
 | `LOG_MAX_MB` | `50` | 로그 파일 최대 크기(MB). |
 | `LOG_RETENTION_DAYS` | `7` | 로그 보존 일수. |
+| `LOG_TIMEZONE` | (서버 로컬) | 로그와 세션 통계에 출력할 타임존 ID. 예) `Asia/Seoul`. 잘못된 값이면 서버 기본 타임존으로 폴백. |
 | `SERVERPORT` / `SERVERHOST` | `3000` / `127.0.0.1` | Fastify 서버 바인딩. |
 
 개발 모드에서는 콘솔에 `pino-pretty` 포맷을, 운영 모드에서는 JSON 라인을 출력합니다. 모든 모드에서 회전 파일이 함께 기록됩니다.
@@ -306,6 +311,7 @@ STT_WS_SUBPROTOCOL=audiohook-v1   # (O) ← 별도 주석 줄 사용
 - `CONVERSATION_LOOKUP_URL`: 세션이 열릴 때 외부 API 호출로 메타데이터 조회.
 - `CONVERSATION_LOOKUP_QUERY_PARAM`: 조회 시 사용할 쿼리 파라미터명.
 - `CONVERSATION_LOOKUP_TIMEOUT_MS`, `CONVERSATION_LOOKUP_CACHE_SECONDS`: 호출 타임아웃과 캐시 TTL.
+- `CONVERSATION_LOOKUP_RETRY_ATTEMPTS`, `CONVERSATION_LOOKUP_RETRY_DELAY_MS`: 초기 조회가 비어 있을 때 백그라운드 재시도 횟수/간격(ms). 기본값은 0회, 1500ms.
 
 조회된 메타데이터는 WebSocket/TCP/gRPC 포워더에 자동 병합되어, STT 하니스가 동일한 conversation 정보를 수신할 수 있습니다.
 

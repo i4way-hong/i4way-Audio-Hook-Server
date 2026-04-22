@@ -42,6 +42,46 @@ export type SessionWebsocketStatsTrackerSummary = {
     }
 };
 
+const logTimezonePreference = process.env['LOG_TIMEZONE'];
+
+const buildTimestampFormatter = (preferredTimezone?: string): Intl.DateTimeFormat => {
+    const baseOptions: Intl.DateTimeFormatOptions = {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZoneName: 'shortOffset'
+    };
+
+    if(preferredTimezone) {
+        try {
+            return new Intl.DateTimeFormat('en-CA', { ...baseOptions, timeZone: preferredTimezone });
+        } catch (error) {
+            console.warn(`Invalid LOG_TIMEZONE value "${preferredTimezone}". Falling back to server timezone.`, error);
+        }
+    }
+
+    return new Intl.DateTimeFormat('en-CA', baseOptions);
+};
+
+const timestampFormatter = buildTimestampFormatter(logTimezonePreference);
+
+const formatTimestamp = (timestamp: number): string => {
+    if(!Number.isFinite(timestamp) || timestamp <= 0) {
+        return 'n/a';
+    }
+
+    const parts = timestampFormatter.formatToParts(new Date(timestamp));
+    const lookup = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? '';
+    const timeZoneName = lookup('timeZoneName');
+    const fractional = Math.floor(timestamp % 1000).toString().padStart(3, '0');
+
+    return `${lookup('year')}-${lookup('month')}-${lookup('day')} ${lookup('hour')}:${lookup('minute')}:${lookup('second')}.${fractional.padEnd(3, '0')} ${timeZoneName}`.trim();
+};
+
 export class SessionWebsocketStatsTracker implements ServerWebSocket {
     readonly ws: ServerWebSocket;
     readonly startTimestamp: number;
@@ -116,7 +156,7 @@ export class SessionWebsocketStatsTracker implements ServerWebSocket {
     summary(): SessionWebsocketStatsTrackerSummary {
         return {
             timing: {
-                start: new Date(this.startTimestamp).toISOString(), 
+                start: formatTimestamp(this.startTimestamp), 
                 open: StreamDuration.fromMilliseconds(Math.max(0, this.openTimestamp - this.startTimestamp)).asDuration(),
                 close: StreamDuration.fromMilliseconds(Math.max(0, this.closeTimestamp - this.startTimestamp)).asDuration(),
             },
@@ -149,7 +189,7 @@ export class SessionWebsocketStatsTracker implements ServerWebSocket {
 
     loggableSummary(): string {
         return (
-            `start: ${new Date(this.startTimestamp).toISOString()}, `+
+            `start: ${formatTimestamp(this.startTimestamp)}, `+
             `open: ${StreamDuration.fromMilliseconds(Math.max(0, this.openTimestamp - this.startTimestamp)).asDuration()}, `+
             `close: ${StreamDuration.fromMilliseconds(Math.max(0, this.closeTimestamp - this.startTimestamp)).asDuration()}, `+
             `received: ${this.bytesReceivedText+this.bytesReceivedBinary}, `+

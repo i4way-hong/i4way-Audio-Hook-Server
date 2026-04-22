@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
 import dotenv from 'dotenv';
 import { pino } from 'pino';
@@ -63,7 +63,7 @@ targets.push({
 const transport = pino.transport({ targets });
 const rootLogger = pino({ level: logLevel }, transport);
 
-const server = Fastify({ logger: rootLogger });
+const server = Fastify({ logger: rootLogger as unknown as FastifyBaseLogger });
 
 server.register(websocket, {
     options: {

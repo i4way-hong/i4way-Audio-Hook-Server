@@ -73,8 +73,8 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
         if(!sessionId || !isUuid(sessionId)) {
             throw new RangeError('Missing or invalid "audiohook-session-id" header field');
         }
-        if(isDev && (connection.socket.binaryType !== 'nodebuffer')) {
-            throw new Error(`WebSocket binary type '${connection.socket.binaryType}' not supported`);
+        if(isDev && (connection.binaryType !== 'nodebuffer')) {
+            throw new Error(`WebSocket binary type '${connection.binaryType}' not supported`);
         }
 
         const logLevel = isDev ? 'debug' : 'info';
@@ -82,7 +82,7 @@ export const addAudiohookSampleRoute = (fastify: FastifyInstance, path: string):
         const logger = request.log.child({ session: sessionId }, { level: logLevel });
         
         // Create a proxy for the WebSocket that tracks statistics
-        const ws = new SessionWebsocketStatsTracker(connection.socket);
+    const ws = new SessionWebsocketStatsTracker(connection);
 
         let session: ServerSession;
         if(recordingBucket) {

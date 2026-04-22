@@ -7,3 +7,6 @@ dist/
 .env.test
 *.wav
 *.pcmu
+*.tgz
+*.tar.gz
+*.zip

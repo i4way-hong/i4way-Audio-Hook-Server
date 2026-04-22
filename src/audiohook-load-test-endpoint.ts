@@ -35,7 +35,7 @@ export const addAudiohookLoadTestRoute = (fastify: FastifyInstance, path: string
         
         request.log.debug(`Websocket Request - URI: <${request.url}>, SocketRemoteAddr: ${request.socket.remoteAddress}, Headers: ${JSON.stringify(request.headers, null, 1)}`);
         
-        const ws = new SessionWebsocketStatsTracker(connection.socket);
+    const ws = new SessionWebsocketStatsTracker(connection);
 
         const session = createServerSession({
             ws,

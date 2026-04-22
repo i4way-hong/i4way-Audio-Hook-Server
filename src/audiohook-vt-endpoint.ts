@@ -33,7 +33,7 @@ export const addAudiohookVoiceTranscriptionRoute = (fastify: FastifyInstance, pa
 
         request.log.info(`Websocket Request - URI: <${request.url}>, SocketRemoteAddr: ${request.socket.remoteAddress}, Headers: ${JSON.stringify(request.headers, null, 1)}`);
 
-        const ws = new SessionWebsocketStatsTracker(connection.socket);
+    const ws = new SessionWebsocketStatsTracker(connection);
 
         const { session, sessionId, organizationId, correlationId } = createAudioHookSession({ request, connection, ws, supportedLanguages: VTSupportedLanguages });
 

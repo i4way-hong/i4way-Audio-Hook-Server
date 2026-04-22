@@ -188,8 +188,7 @@ async function startWs() {
         reply.send(body);
     });
 
-    fastify.get(PATHNAME, { websocket: true }, (connection /* SocketStream */) => {
-        const ws = connection.socket as WebSocket;
+    fastify.get(PATHNAME, { websocket: true }, (ws) => {
         let inited = false;
         let bytes = 0;
         let profileId = 'ah-mrcpv1';

@@ -10,6 +10,8 @@ const LOOKUP_BASE_URL = process.env['CONVERSATION_LOOKUP_URL'] || '';
 const QUERY_PARAM = process.env['CONVERSATION_LOOKUP_QUERY_PARAM'] || 'conversation_id';
 const REQUEST_TIMEOUT_MS = Math.max(0, parseInt(process.env['CONVERSATION_LOOKUP_TIMEOUT_MS'] || '3000', 10));
 const CACHE_SECONDS = Math.max(0, parseInt(process.env['CONVERSATION_LOOKUP_CACHE_SECONDS'] || '30', 10));
+const RETRY_ATTEMPTS = Math.max(0, parseInt(process.env['CONVERSATION_LOOKUP_RETRY_ATTEMPTS'] || '0', 10));
+const RETRY_DELAY_MS = Math.max(0, parseInt(process.env['CONVERSATION_LOOKUP_RETRY_DELAY_MS'] || '1500', 10));
 
 const CONVERSATION_RECORDS_SYMBOL = Symbol.for('audiohook.conversationLookup.records');
 const CONVERSATION_ID_SYMBOL = Symbol.for('audiohook.conversationLookup.conversationId');
@@ -22,12 +24,16 @@ type ConversationMetadataCarrier = {
     [CONVERSATION_ID_SYMBOL]?: string | undefined;
 };
 
+type RetryController = { cancelled: boolean };
+
 const cache: Map<string, { expires: number; data: ConversationLookupResult }> = new Map();
 const sessionStore: WeakMap<ServerSession, ConversationLookupResult> = new WeakMap();
+const retryControllers: WeakMap<ServerSession, RetryController> = new WeakMap();
 
 const isLookupEnabled = LOOKUP_BASE_URL.length > 0;
 
 const now = () => Date.now();
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function performLookup(conversationId: string, logger?: Logger): Promise<ConversationLookupResult | null> {
     logger?.debug?.(`[conversation-lookup] Looking up conversationId=${conversationId}`);
@@ -95,10 +101,64 @@ export async function lookupConversation(conversationId: string, logger?: Logger
     return performLookup(conversationId, logger);
 }
 
+function cancelLookupRetry(session: ServerSession): void {
+    const controller = retryControllers.get(session);
+    if (controller) {
+        controller.cancelled = true;
+        retryControllers.delete(session);
+    }
+}
+
+function startLookupRetry(options: {
+    session: ServerSession;
+    carrier: ConversationMetadataCarrier;
+    conversationId: string;
+    logger?: Logger;
+}): void {
+    if (RETRY_ATTEMPTS <= 0) {
+        return;
+    }
+    const { session, carrier, conversationId, logger } = options;
+    cancelLookupRetry(session);
+    const controller: RetryController = { cancelled: false };
+    retryControllers.set(session, controller);
+
+    const run = async () => {
+        for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
+            if (controller.cancelled) {
+                break;
+            }
+            if (RETRY_DELAY_MS > 0) {
+                await delay(RETRY_DELAY_MS);
+            }
+            if (controller.cancelled) {
+                break;
+            }
+            const records = await performLookup(conversationId, logger);
+            if (controller.cancelled) {
+                break;
+            }
+            if (records && records.length > 0) {
+                sessionStore.set(session, records);
+                Reflect.set(carrier, CONVERSATION_RECORDS_SYMBOL, records);
+                logger?.info?.(`[conversation-lookup] conversationId=${conversationId} records=${records.length} (retry ${attempt}/${RETRY_ATTEMPTS})`);
+                retryControllers.delete(session);
+                return;
+            }
+            logger?.debug?.(`[conversation-lookup] retry attempt=${attempt}/${RETRY_ATTEMPTS} returned 0 records for conversationId=${conversationId}`);
+        }
+        logger?.warn?.(`[conversation-lookup] retries exhausted for conversationId=${conversationId}`);
+        retryControllers.delete(session);
+    };
+
+    void run();
+}
+
 export function registerConversationLookup(session: ServerSession, options?: { logger?: Logger }): void {
     session.addOpenHandler(async ({ openParams }) => {
         const conversationId = openParams.conversationId;
         const carrier = session as ConversationMetadataCarrier;
+        const logger = options?.logger ?? session.logger;
 
         if (conversationId && !isNullUuid(conversationId)) {
             Reflect.set(carrier, CONVERSATION_ID_SYMBOL, conversationId);
@@ -110,6 +170,7 @@ export function registerConversationLookup(session: ServerSession, options?: { l
             Reflect.deleteProperty(carrier, CONVERSATION_RECORDS_SYMBOL);
             sessionStore.delete(session);
             return async () => {
+                cancelLookupRetry(session);
                 sessionStore.delete(session);
                 Reflect.deleteProperty(carrier, CONVERSATION_RECORDS_SYMBOL);
                 if (!conversationId || isNullUuid(conversationId)) {
@@ -118,12 +179,13 @@ export function registerConversationLookup(session: ServerSession, options?: { l
             };
         }
 
-        const logger = options?.logger ?? session.logger;
         const records = await performLookup(conversationId, logger);
         if (!records || records.length === 0) {
             sessionStore.delete(session);
             Reflect.deleteProperty(carrier, CONVERSATION_RECORDS_SYMBOL);
+            startLookupRetry({ session, carrier, conversationId, logger });
             return async () => {
+                cancelLookupRetry(session);
                 sessionStore.delete(session);
                 Reflect.deleteProperty(carrier, CONVERSATION_RECORDS_SYMBOL);
                 Reflect.deleteProperty(carrier, CONVERSATION_ID_SYMBOL);
@@ -134,6 +196,7 @@ export function registerConversationLookup(session: ServerSession, options?: { l
         Reflect.set(carrier, CONVERSATION_RECORDS_SYMBOL, records);
         logger.info?.(`[conversation-lookup] conversationId=${conversationId} records=${records.length}`);
         return async () => {
+            cancelLookupRetry(session);
             sessionStore.delete(session);
             Reflect.deleteProperty(carrier, CONVERSATION_RECORDS_SYMBOL);
             Reflect.deleteProperty(carrier, CONVERSATION_ID_SYMBOL);
